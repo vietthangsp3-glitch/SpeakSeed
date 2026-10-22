@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+*.db
+*.db-*
+__pycache__/
+
+audio_cache/
+.source-cache/
+.pytest_cache/
+.docker-build/
+qa_artifacts/
+playwright-report/
+test-results/

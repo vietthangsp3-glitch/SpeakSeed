@@ -1,0 +1,22 @@
+{
+	auto_https disable_redirects
+}
+
+https://{$STAGING_HOST:localhost} {
+	tls internal
+	encode zstd gzip
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	reverse_proxy web:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			read_timeout 11m
+		}
+	}
+}

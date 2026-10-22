@@ -1,0 +1,16 @@
+ALTER TABLE library_words ADD COLUMN normalized_word TEXT NOT NULL DEFAULT '';
+ALTER TABLE library_words ADD COLUMN example_vi TEXT NOT NULL DEFAULT '';
+ALTER TABLE library_words ADD COLUMN quality_score INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE library_words ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE progress ADD COLUMN due_at TEXT;
+ALTER TABLE progress ADD COLUMN interval_days REAL NOT NULL DEFAULT 0;
+ALTER TABLE progress ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5;
+ALTER TABLE progress ADD COLUMN repetitions INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE progress ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE progress ADD COLUMN last_reviewed_at TEXT;
+CREATE TABLE IF NOT EXISTS data_sources(name TEXT PRIMARY KEY,version TEXT NOT NULL,source_url TEXT NOT NULL,license_name TEXT NOT NULL,license_url TEXT NOT NULL,attribution TEXT NOT NULL,retrieved_at TEXT NOT NULL,sha256 TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS word_attributions(word_id INTEGER NOT NULL,field_name TEXT NOT NULL,source_name TEXT NOT NULL,source_record_id TEXT NOT NULL DEFAULT '',source_url TEXT NOT NULL,license_name TEXT NOT NULL,attribution TEXT NOT NULL DEFAULT '',PRIMARY KEY(word_id,field_name,source_name),FOREIGN KEY(word_id) REFERENCES library_words(id) ON DELETE CASCADE,FOREIGN KEY(source_name) REFERENCES data_sources(name));
+CREATE TABLE IF NOT EXISTS import_runs(id INTEGER PRIMARY KEY,importer_version TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT,status TEXT NOT NULL,inserted INTEGER NOT NULL DEFAULT 0,updated INTEGER NOT NULL DEFAULT 0,skipped INTEGER NOT NULL DEFAULT 0,report_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_progress_due ON progress(user_id,due_at);
+CREATE INDEX IF NOT EXISTS idx_words_publish ON library_words(reviewed,stage,topic);
+CREATE INDEX IF NOT EXISTS idx_words_normalized ON library_words(normalized_word);

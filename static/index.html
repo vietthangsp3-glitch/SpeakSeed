@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SpeakSeed — Grow your English</title>
+  <link rel="stylesheet" href="/static/style.css?v=6">
+</head>
+<body>
+  <a class="skip-link" href="#content">Bỏ qua điều hướng</a>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="brandmark">✳</span> speak<span>seed</span><small>ENGLISH MADE EASY</small></div>
+      <div class="nav" id="nav">
+        <button class="active" data-view="home">⌂ <span>Tổng quan</span></button>
+        <button data-view="placement">◎ <span>Kiểm tra đầu vào</span></button>
+        <button data-view="learn">▦ <span>Học từ vựng</span></button>
+        <button data-view="reverse">✎ <span>Việt → Anh</span></button>
+        <button data-view="grammar">▣ <span>Ngữ pháp</span></button>
+        <button data-view="skills">◈ <span>4 kỹ năng</span></button>
+        <button data-view="rewrite">⇄ <span>Viết lại câu</span></button>
+        <button data-view="dictation">♫ <span>Nghe & chép</span></button>
+        <button data-view="speak">◉ <span>Luyện phát âm</span></button>
+        <button data-view="quiz">✦ <span>Mini game</span></button>
+        <button data-view="conversation">🎙 <span>AI Speaking (tùy chọn)</span></button>
+        <button data-view="tutor">✧ <span>Gia sư AI (tùy chọn)</span></button>
+        <button data-view="progress">▤ <span>Tiến độ</span></button>
+      </div>
+      <div class="sidebar-bottom">
+        <div class="side-card"><div>🌱</div><b>Mỗi ngày một chút!</b><p>10 phút mỗi ngày giúp bạn xây dựng thói quen học tiếng Anh.</p></div>
+        <div class="user" id="sideUser">Đăng nhập để lưu tiến độ</div>
+      </div>
+    </aside>
+    <main class="main" aria-label="Nội dung học tập">
+      <header class="top">
+        <div class="breadcrumb">HỌC TIẾNG ANH TỪ CON SỐ 0 <span> / </span> <b id="crumb">Tổng quan</b></div>
+        <div class="topright"><span class="pill">🔥 <b id="streak">0</b> ngày học</span><button class="outline" id="authBtn">Đăng nhập</button></div>
+      </header>
+      <div class="content" id="content" tabindex="-1"></div>
+    </main>
+  </div>
+  <div class="modal-wrap hidden" id="modal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <button class="close" id="closeModal" aria-label="Đóng hộp thoại">×</button><div class="logo-circle" aria-hidden="true">✳</div>
+    <h2 id="authTitle">Chào mừng trở lại!</h2><p>Đăng nhập để đồng bộ tiến độ học của bạn.</p>
+    <form id="authForm">
+      <div id="nameField" class="hidden"><label>Họ tên</label><input id="name" autocomplete="name" placeholder="Tên của bạn"></div>
+      <label>Email</label><input type="email" id="email" required autocomplete="email" placeholder="ban@example.com">
+      <label>Mật khẩu (ít nhất 8 ký tự)</label><input type="password" id="password" required minlength="8" autocomplete="current-password" placeholder="••••••••">
+      <button class="primary full" type="submit" id="authSubmit">Đăng nhập</button>
+    </form>
+    <p class="error" id="authError"></p><button class="textbtn" id="switchAuth">Chưa có tài khoản? Đăng ký</button>
+  </div></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v=7"></script>
+</body>
+</html>

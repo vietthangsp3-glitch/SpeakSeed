@@ -1,0 +1,211 @@
+{
+  "levels": [
+    {
+      "id": "A0",
+      "name": "Khởi động",
+      "description": "Làm quen từ vựng và câu ngắn"
+    },
+    {
+      "id": "A1",
+      "name": "Cơ bản",
+      "description": "Chào hỏi, sinh hoạt và câu hỏi thường ngày"
+    },
+    {
+      "id": "A2",
+      "name": "Sơ trung cấp",
+      "description": "Quá khứ, tương lai, so sánh và kinh nghiệm"
+    },
+    {
+      "id": "B1",
+      "name": "Trung cấp",
+      "description": "Diễn đạt ý kiến và câu phức"
+    },
+    {
+      "id": "B2",
+      "name": "Trung cao cấp",
+      "description": "Lập luận, sắc thái và giao tiếp độc lập"
+    }
+  ],
+  "exercises": [
+    {
+      "id": 1,
+      "level": "A0",
+      "topic": "To be",
+      "sentence": "I am a student.",
+      "vi": "Tôi là một học sinh.",
+      "blank": "I ___ a student.",
+      "answer": "am",
+      "explanation": "Động từ to be: I am, you/we/they are, he/she/it is."
+    },
+    {
+      "id": 2,
+      "level": "A0",
+      "topic": "Mạo từ",
+      "sentence": "This is an apple.",
+      "vi": "Đây là một quả táo.",
+      "blank": "This is ___ apple.",
+      "answer": "an",
+      "explanation": "Dùng an trước âm nguyên âm."
+    },
+    {
+      "id": 3,
+      "level": "A0",
+      "topic": "Số nhiều",
+      "sentence": "I have two books.",
+      "vi": "Tôi có hai quyển sách.",
+      "blank": "I have two ___.",
+      "answer": "books",
+      "explanation": "Danh từ đếm được số nhiều thường thêm -s."
+    },
+    {
+      "id": 4,
+      "level": "A1",
+      "topic": "Hiện tại đơn",
+      "sentence": "She likes coffee.",
+      "vi": "Cô ấy thích cà phê.",
+      "blank": "She ___ coffee.",
+      "answer": "likes",
+      "explanation": "Chủ ngữ he/she/it: động từ hiện tại đơn thêm -s/-es."
+    },
+    {
+      "id": 5,
+      "level": "A1",
+      "topic": "Phủ định",
+      "sentence": "I do not like milk.",
+      "vi": "Tôi không thích sữa.",
+      "blank": "I ___ not like milk.",
+      "answer": "do",
+      "explanation": "Phủ định hiện tại đơn với I/you/we/they: do not."
+    },
+    {
+      "id": 6,
+      "level": "A1",
+      "topic": "Câu hỏi",
+      "sentence": "Do you speak English?",
+      "vi": "Bạn có nói tiếng Anh không?",
+      "blank": "___ you speak English?",
+      "answer": "Do",
+      "explanation": "Câu hỏi hiện tại đơn với you: Do + chủ ngữ + động từ nguyên mẫu?"
+    },
+    {
+      "id": 7,
+      "level": "A1",
+      "topic": "Hiện tại tiếp diễn",
+      "sentence": "She is reading a book.",
+      "vi": "Cô ấy đang đọc sách.",
+      "blank": "She is ___ a book.",
+      "answer": "reading",
+      "explanation": "Hiện tại tiếp diễn: am/is/are + V-ing."
+    },
+    {
+      "id": 8,
+      "level": "A1",
+      "topic": "Trạng từ tần suất",
+      "sentence": "I always get up early.",
+      "vi": "Tôi luôn dậy sớm.",
+      "blank": "I ___ get up early.",
+      "answer": "always",
+      "explanation": "Trạng từ tần suất thường đứng trước động từ thường."
+    },
+    {
+      "id": 9,
+      "level": "A1",
+      "topic": "There is/are",
+      "sentence": "There are three chairs.",
+      "vi": "Có ba cái ghế.",
+      "blank": "There ___ three chairs.",
+      "answer": "are",
+      "explanation": "There are đi với danh từ số nhiều."
+    },
+    {
+      "id": 10,
+      "level": "A2",
+      "topic": "Quá khứ đơn",
+      "sentence": "We visited the museum yesterday.",
+      "vi": "Hôm qua chúng tôi đã thăm bảo tàng.",
+      "blank": "We ___ the museum yesterday.",
+      "answer": "visited",
+      "explanation": "Động từ có quy tắc trong quá khứ thường thêm -ed."
+    },
+    {
+      "id": 11,
+      "level": "A2",
+      "topic": "Tương lai",
+      "sentence": "I will call you tomorrow.",
+      "vi": "Ngày mai tôi sẽ gọi bạn.",
+      "blank": "I ___ call you tomorrow.",
+      "answer": "will",
+      "explanation": "Will + động từ nguyên mẫu diễn tả dự đoán hoặc quyết định."
+    },
+    {
+      "id": 12,
+      "level": "A2",
+      "topic": "So sánh hơn",
+      "sentence": "This bag is cheaper than that one.",
+      "vi": "Chiếc túi này rẻ hơn chiếc kia.",
+      "blank": "This bag is ___ than that one.",
+      "answer": "cheaper",
+      "explanation": "Tính từ ngắn + -er + than."
+    },
+    {
+      "id": 13,
+      "level": "A2",
+      "topic": "Hiện tại hoàn thành",
+      "sentence": "I have finished my homework.",
+      "vi": "Tôi đã làm xong bài tập.",
+      "blank": "I have ___ my homework.",
+      "answer": "finished",
+      "explanation": "Hiện tại hoàn thành: have/has + V3."
+    },
+    {
+      "id": 14,
+      "level": "A2",
+      "topic": "Động từ khuyết thiếu",
+      "sentence": "You should drink more water.",
+      "vi": "Bạn nên uống thêm nước.",
+      "blank": "You ___ drink more water.",
+      "answer": "should",
+      "explanation": "Should + động từ nguyên mẫu để đưa ra lời khuyên."
+    },
+    {
+      "id": 15,
+      "level": "A2",
+      "topic": "Điều kiện loại 1",
+      "sentence": "If it rains, I will stay home.",
+      "vi": "Nếu trời mưa, tôi sẽ ở nhà.",
+      "blank": "If it ___, I will stay home.",
+      "answer": "rains",
+      "explanation": "If + hiện tại đơn, will + động từ nguyên mẫu."
+    },
+    {
+      "id": 16,
+      "level": "B1",
+      "topic": "Mệnh đề quan hệ",
+      "sentence": "The woman who called is my teacher.",
+      "vi": "Người phụ nữ đã gọi là giáo viên của tôi.",
+      "blank": "The woman ___ called is my teacher.",
+      "answer": "who",
+      "explanation": "Who thay thế cho người làm chủ ngữ trong mệnh đề quan hệ."
+    },
+    {
+      "id": 17,
+      "level": "B1",
+      "topic": "Câu bị động",
+      "sentence": "The bridge was built in 1990.",
+      "vi": "Cây cầu được xây vào năm 1990.",
+      "blank": "The bridge was ___ in 1990.",
+      "answer": "built",
+      "explanation": "Bị động quá khứ: was/were + V3."
+    },
+    {
+      "id": 18,
+      "level": "B1",
+      "topic": "Mặc dù",
+      "sentence": "Although it was raining, we went out.",
+      "vi": "Mặc dù trời đang mưa, chúng tôi vẫn ra ngoài.",
+      "blank": "___ it was raining, we went out.",
+      "answer": "Although",
+      "explanation": "Although nối hai mệnh đề có ý tương phản."
+    }
+  ]
+}

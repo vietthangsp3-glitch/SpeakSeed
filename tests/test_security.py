@@ -1,0 +1,210 @@
+import sqlite3
+from datetime import datetime, timezone
+
+from fastapi.testclient import TestClient
+
+import app as application
+from migrations import run_migrations
+
+
+def setup_app(tmp_path, monkeypatch):
+    database = tmp_path / "security.db"
+    run_migrations(database, application.ROOT / "migrations")
+    monkeypatch.setattr(application, "DB", database)
+    application._rate.clear()
+    return TestClient(application.app), database
+
+
+def test_cookie_session_is_httponly_and_csrf_protected(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_TRANSPORT", "cookie")
+    client, _ = setup_app(tmp_path, monkeypatch)
+    response = client.post("/api/register", json={"name": "Lan", "email": "lan@example.com", "password": "correct-horse"})
+    assert response.status_code == 200 and "token" not in response.json()
+    cookies = response.headers.get("set-cookie", "")
+    assert "ss_session=" in cookies and "HttpOnly" in cookies and "SameSite=strict" in cookies
+    assert client.get("/api/me").status_code == 200
+    assert client.post("/api/profile", json={"current_level": "A1"}).status_code == 403
+    csrf = client.cookies.get("ss_csrf")
+    assert client.post("/api/profile", headers={"X-CSRF-Token": csrf}, json={"current_level": "A1"}).status_code == 200
+
+
+def test_origin_headers_and_sensitive_headers(tmp_path, monkeypatch):
+    client, _ = setup_app(tmp_path, monkeypatch)
+    blocked = client.post("/api/login", headers={"Origin": "https://evil.invalid"}, json={"email": "x@y.com", "password": "password1"})
+    assert blocked.status_code == 403
+    response = client.get("/api/health/live")
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_login_bruteforce_limit_and_sql_injection_input(tmp_path, monkeypatch):
+    client, database = setup_app(tmp_path, monkeypatch)
+    credentials = {"name": "Lan", "email": "lan@example.com", "password": "correct-horse"}
+    assert client.post("/api/register", json=credentials).status_code == 200
+    for _ in range(8):
+        assert client.post("/api/login", json={"email": credentials["email"], "password": "wrong-pass"}).status_code == 401
+    limited = client.post("/api/login", json={"email": credentials["email"], "password": "wrong-pass"})
+    assert limited.status_code == 429 and limited.headers["retry-after"] == "900"
+    attack = client.post("/api/login", json={"email": "' OR 1=1 --@example.com", "password": "wrong-pass"})
+    assert attack.status_code in {401, 429}
+    with sqlite3.connect(database) as con:
+        assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+
+
+def test_ai_usage_endpoint_is_account_scoped(tmp_path, monkeypatch):
+    client, database = setup_app(tmp_path, monkeypatch)
+    first = client.post("/api/register", json={"name": "A", "email": "a@example.com", "password": "correct-horse"}).json()["token"]
+    second = client.post("/api/register", json={"name": "B", "email": "b@example.com", "password": "correct-horse"}).json()["token"]
+    with sqlite3.connect(database) as con:
+        user_id = con.execute("SELECT id FROM users WHERE email='a@example.com'").fetchone()[0]
+        con.execute("INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,created_at) VALUES(?,?,'tutor','succeeded','test',10,datetime('now'))", (user_id, "hash"))
+    one = client.get("/api/usage", headers={"Authorization": "Bearer " + first}).json()
+    two = client.get("/api/usage", headers={"Authorization": "Bearer " + second}).json()
+    assert sum(item["requests"] for item in one["items"]) == 1
+    assert two["items"] == []
+
+
+def test_ai_account_quota_is_enforced_before_provider_call(tmp_path, monkeypatch):
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "A", "email": "a@example.com", "password": "correct-horse"}).json()["token"]
+    with sqlite3.connect(database) as con:
+        user_id = con.execute("SELECT id FROM users").fetchone()[0]
+        created = datetime.now(timezone.utc).isoformat()
+        con.executemany("INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,created_at) VALUES(?,?,'tutor','succeeded','test',?)", [(user_id, f"h{i}", created) for i in range(40)])
+    response = client.post("/api/chat", headers={"Authorization": "Bearer " + token}, json={"message": "Hello"})
+    assert response.status_code == 429 and response.headers["retry-after"] == "3600"
+
+
+def test_login_replaces_attacker_supplied_session_and_logout_revokes_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTH_TRANSPORT", "cookie")
+    client, _ = setup_app(tmp_path, monkeypatch)
+    credentials = {"name": "Lan", "email": "rotation@example.com", "password": "correct-horse"}
+    assert client.post("/api/register", json=credentials).status_code == 200
+    csrf = client.cookies.get("ss_csrf")
+    assert client.post("/api/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
+    client.cookies.set("ss_session", "attacker-fixed-session", domain="testserver.local", path="/")
+    response = client.post("/api/login", json={"email": credentials["email"], "password": credentials["password"]})
+    assert response.status_code == 200
+    issued = client.cookies.get("ss_session")
+    assert issued and issued != "attacker-fixed-session"
+    csrf = client.cookies.get("ss_csrf")
+    assert client.post("/api/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
+    replay = TestClient(application.app)
+    replay.cookies.set("ss_session", issued, domain="testserver.local", path="/")
+    assert replay.get("/api/me").status_code == 401
+
+
+def test_forwarded_for_does_not_bypass_login_limit_without_trusted_proxy(tmp_path, monkeypatch):
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    client, _ = setup_app(tmp_path, monkeypatch)
+    credentials = {"name": "Lan", "email": "rate@example.com", "password": "correct-horse"}
+    assert client.post("/api/register", json=credentials).status_code == 200
+    for attempt in range(8):
+        response = client.post(
+            "/api/login",
+            headers={"X-Forwarded-For": f"198.51.100.{attempt + 1}"},
+            json={"email": credentials["email"], "password": "wrong-pass"},
+        )
+        assert response.status_code == 401
+    limited = client.post(
+        "/api/login",
+        headers={"X-Forwarded-For": "203.0.113.99"},
+        json={"email": credentials["email"], "password": "wrong-pass"},
+    )
+    assert limited.status_code == 429
+
+
+def test_forwarded_for_requires_explicitly_trusted_direct_peer(monkeypatch):
+    from starlette.requests import Request
+
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "127.0.0.1,172.16.0.0/12")
+    headers = [(b"x-forwarded-for", b"198.51.100.25")]
+    untrusted = Request({"type": "http", "method": "GET", "path": "/", "headers": headers,
+                         "client": ("203.0.113.10", 50000), "server": ("test", 80), "scheme": "http"})
+    trusted = Request({"type": "http", "method": "GET", "path": "/", "headers": headers,
+                       "client": ("172.20.0.3", 50000), "server": ("test", 80), "scheme": "http"})
+    malformed = Request({"type": "http", "method": "GET", "path": "/", "headers": [(b"x-forwarded-for", b"not-an-ip")],
+                         "client": ("172.20.0.3", 50000), "server": ("test", 80), "scheme": "http"})
+    assert application.request_ip(untrusted) == "203.0.113.10"
+    assert application.request_ip(trusted) == "198.51.100.25"
+    assert application.request_ip(malformed) == "172.20.0.3"
+
+
+def test_vercel_platform_client_ip_header_is_used_only_on_vercel(monkeypatch):
+    from starlette.requests import Request
+
+    headers = [(b"x-vercel-forwarded-for", b"198.51.100.42")]
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": headers,
+                       "client": ("10.0.0.7", 50000), "server": ("test", 80), "scheme": "https"})
+    monkeypatch.delenv("VERCEL", raising=False)
+    assert application.request_ip(request) == "10.0.0.7"
+    monkeypatch.setenv("VERCEL", "1")
+    assert application.request_ip(request) == "198.51.100.42"
+
+
+def test_runtime_config_keeps_live_off_by_default(monkeypatch):
+    monkeypatch.delenv("GEMINI_LIVE_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    response = TestClient(application.app).get("/api/runtime-config")
+    assert response.status_code == 200
+    assert response.json() == {
+        "gemini_live_enabled": False,
+        "gemini_text_enabled": False,
+        "browser_speech_only": True,
+    }
+
+
+def test_production_cookie_hsts_cors_and_trusted_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("APP_SECRET", "stage7-test-secret-with-more-than-32-characters")
+    monkeypatch.setenv("AUTH_TRANSPORT", "cookie")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    client, _ = setup_app(tmp_path, monkeypatch)
+    response = client.post("/api/register", json={"name": "Lan", "email": "secure@example.com", "password": "correct-horse"})
+    assert response.status_code == 200
+    assert "Secure" in response.headers["set-cookie"]
+    assert response.headers["strict-transport-security"].startswith("max-age=31536000")
+    assert client.get("/api/health/live", headers={"Host": "evil.invalid"}).status_code == 400
+    preflight = client.options("/api/profile", headers={
+        "Origin": "http://localhost:8000", "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "X-CSRF-Token,Content-Type",
+    })
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "http://localhost:8000"
+
+
+def test_legacy_tts_endpoint_is_hard_disabled_without_usage_or_provider_call(tmp_path, monkeypatch):
+    client, database = setup_app(tmp_path, monkeypatch)
+
+    def forbidden_provider_call(*args, **kwargs):
+        raise AssertionError("The disabled TTS route must never call an external provider")
+
+    monkeypatch.setattr(application.urllib.request, "urlopen", forbidden_provider_call)
+    response = client.post("/api/tts", json={"text": "Hello", "voice": "Kore", "speed": 1})
+    assert response.status_code == 410
+    assert "Web Speech API" in response.json()["detail"]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM ai_usage WHERE feature='tts'").fetchone()[0] == 0
+
+
+def test_gemini_uses_one_key_without_rotation(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEYS", "first-key,second-key")
+    assert application.gemini_key() == "first-key"
+    assert application.gemini_key() == "first-key"
+
+
+def test_beginner_ai_limits_are_account_scoped_and_explain_non_ai_continuity(tmp_path, monkeypatch):
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "A", "email": "limit@example.com", "password": "correct-horse"}).json()["token"]
+    with sqlite3.connect(database) as con:
+        user_id = con.execute("SELECT id FROM users WHERE email='limit@example.com'").fetchone()[0]
+        created = datetime.now(timezone.utc).isoformat()
+        con.executemany("INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,created_at) VALUES(?,?,'tutor','succeeded','test',?)", [(user_id, f"h{i}", created) for i in range(10)])
+    response = client.post("/api/chat", headers={"Authorization": "Bearer " + token}, json={"message": "Hello"})
+    assert response.status_code == 429
+    assert "Từ vựng, ngữ pháp, nghe và đọc vẫn dùng bình thường" in response.json()["detail"]
+
