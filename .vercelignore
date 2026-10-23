@@ -8,6 +8,7 @@ __pycache__
 .source-cache
 .docker-build
 audio_cache
+backups
 qa_artifacts
 playwright-report
 test-results

@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app as application
@@ -174,6 +175,50 @@ def test_production_cookie_hsts_cors_and_trusted_host(tmp_path, monkeypatch):
     })
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == "http://localhost:8000"
+
+
+def test_exact_production_host_allows_root_favicon_and_readiness(tmp_path, monkeypatch):
+    client, _ = setup_app(tmp_path, monkeypatch)
+    headers = {"Host": "speak-seed.vercel.app"}
+    assert client.get("/", headers=headers).status_code == 200
+    assert client.get("/favicon.ico", headers=headers).status_code == 204
+    ready = client.get("/api/health/ready", headers=headers)
+    assert ready.status_code != 400
+    assert ready.text != "Invalid host header"
+
+
+def test_vercel_system_hosts_are_added_without_global_wildcard(monkeypatch):
+    from fastapi import FastAPI
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    monkeypatch.setenv("PRIMARY_HOST", "speak-seed.vercel.app")
+    monkeypatch.setenv("ALLOWED_HOSTS", "beta.speakseed.example")
+    monkeypatch.setenv("VERCEL_URL", "speak-seed-a1b2c3.vercel.app")
+    monkeypatch.setenv("VERCEL_BRANCH_URL", "speak-seed-preview-team.vercel.app")
+    monkeypatch.setenv("VERCEL_PROJECT_PRODUCTION_URL", "speak-seed.vercel.app")
+    hosts = application.configured_deployment_hosts()
+    assert hosts == [
+        "localhost", "127.0.0.1", "testserver", "speak-seed.vercel.app",
+        "beta.speakseed.example", "speak-seed-a1b2c3.vercel.app",
+        "speak-seed-preview-team.vercel.app",
+    ]
+    assert "*" not in hosts
+    preview_app = FastAPI()
+    preview_app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+
+    @preview_app.get("/")
+    def preview_home():
+        return {"ok": True}
+
+    client = TestClient(preview_app)
+    assert client.get("/", headers={"Host": "speak-seed-a1b2c3.vercel.app"}).status_code == 200
+    assert client.get("/", headers={"Host": "attacker.vercel.app"}).status_code == 400
+
+
+def test_host_allowlist_rejects_wildcard(monkeypatch):
+    monkeypatch.setenv("ALLOWED_HOSTS", "*")
+    with pytest.raises(RuntimeError, match="Hostname không hợp lệ"):
+        application.configured_deployment_hosts()
 
 
 def test_legacy_tts_endpoint_is_hard_disabled_without_usage_or_provider_call(tmp_path, monkeypatch):

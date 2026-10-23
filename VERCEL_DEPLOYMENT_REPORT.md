@@ -84,10 +84,11 @@ Chỉ cấu hình cho môi trường **Preview** trước. Không ghi giá trị
 
 | Tên | Giá trị/ý nghĩa |
 |---|---|
-| `ALLOWED_ORIGINS` | `https://<preview-host>`; thêm branch alias nếu dùng alias thay vì deployment URL. |
-| `ALLOWED_HOSTS` | `<preview-host>`; không có protocol/path. |
+| `PRIMARY_HOST` | `speak-seed.vercel.app`; hostname production chính xác, không có protocol/path. |
+| `ALLOWED_ORIGINS` | Các origin bổ sung nếu có; `PRIMARY_HOST` và hostname Vercel được code tự thêm dưới dạng HTTPS. |
+| `ALLOWED_HOSTS` | Các alias bổ sung, phân cách bằng dấu phẩy; không có protocol/path và tuyệt đối không dùng `*`. |
 
-`VERCEL` và `VERCEL_URL` là system variables của Vercel, không tự tạo. Deployment URL được code tự thêm vào allowlist; hai biến explicit phía trên vẫn nên đặt khi dùng stable preview alias.
+`VERCEL`, `VERCEL_URL`, `VERCEL_BRANCH_URL` và `VERCEL_PROJECT_PRODUCTION_URL` là system variables của Vercel, không tự tạo. Ba hostname Vercel này được code tự thêm vào allowlist. `PRIMARY_HOST` nên được đặt rõ ràng cho production domain.
 
 ### AI tùy chọn
 

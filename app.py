@@ -27,10 +27,30 @@ ROOT=Path(__file__).parent
 DB=configured_database(ROOT/'speakseed.db')
 configure_logging()
 app=FastAPI(title='SpeakSeed API', docs_url='/api/docs')
-VERCEL_HOSTS=[]
-for _vercel_name in ('VERCEL_URL','VERCEL_BRANCH_URL'):
- _vercel_host=os.getenv(_vercel_name,'').strip().strip('/')
- if _vercel_host and _vercel_host not in VERCEL_HOSTS:VERCEL_HOSTS.append(_vercel_host)
+
+def _normalized_host(raw:str)->str:
+ host=raw.strip().lower().rstrip('.')
+ if not host:return ''
+ if host=='*' or '://' in host or '/' in host or any(char.isspace() for char in host):
+  raise RuntimeError(f'Hostname không hợp lệ trong allowlist: {raw!r}')
+ return host
+
+def configured_deployment_hosts()->list[str]:
+ """Exact host allowlist for local, production and Vercel-generated URLs."""
+ hosts=['localhost','127.0.0.1','testserver']
+ configured=os.getenv('ALLOWED_HOSTS','')
+ candidates=[os.getenv('PRIMARY_HOST','speak-seed.vercel.app')]
+ candidates.extend(configured.split(','))
+ candidates.extend(os.getenv(name,'') for name in (
+  'VERCEL_URL','VERCEL_BRANCH_URL','VERCEL_PROJECT_PRODUCTION_URL'
+ ))
+ for raw in candidates:
+  host=_normalized_host(raw)
+  if host and host not in hosts:hosts.append(host)
+ return hosts
+
+_allowed_hosts=configured_deployment_hosts()
+VERCEL_HOSTS=[host for host in _allowed_hosts if host not in ('localhost','127.0.0.1','testserver')]
 _default_origins='http://localhost:8000,http://127.0.0.1:8000'
 ALLOWED_ORIGINS=[x.strip().rstrip('/') for x in os.getenv('ALLOWED_ORIGINS',_default_origins).split(',') if x.strip()]
 for _vercel_host in VERCEL_HOSTS:
@@ -39,9 +59,6 @@ if '*' in ALLOWED_ORIGINS:raise RuntimeError('Không được dùng wildcard ALL
 app.add_middleware(CORSMiddleware,allow_origins=ALLOWED_ORIGINS,allow_credentials=True,
                    allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type','X-CSRF-Token'])
 app.add_middleware(GZipMiddleware,minimum_size=1000)
-_allowed_hosts=[x.strip() for x in os.getenv('ALLOWED_HOSTS','localhost,127.0.0.1,testserver').split(',') if x.strip()]
-for _vercel_host in VERCEL_HOSTS:
- if _vercel_host not in _allowed_hosts:_allowed_hosts.append(_vercel_host)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=_allowed_hosts)
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
@@ -168,6 +185,9 @@ def current(request:Request,authorization:str|None=Header(default=None),x_csrf_t
 
 @app.get('/')
 def home():return FileResponse(ROOT/'static'/'index.html')
+
+@app.get('/favicon.ico',include_in_schema=False)
+def favicon():return Response(status_code=204)
 
 @app.get('/api/health/live')
 def health_live():
