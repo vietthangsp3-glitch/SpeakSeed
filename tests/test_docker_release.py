@@ -16,7 +16,7 @@ def test_docker_seed_is_repeatable_and_contains_no_account_data(tmp_path):
     prepare(source, destination)
     with sqlite3.connect(destination) as connection:
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM library_words WHERE reviewed=1").fetchone()[0] == 4213
+        assert connection.execute("SELECT COUNT(*) FROM library_words WHERE reviewed=1").fetchone()[0] == 6280
         assert connection.execute("SELECT COUNT(*) FROM grammar_lessons WHERE published=1").fetchone()[0] == 100
         assert connection.execute("SELECT COUNT(*) FROM grammar_exercises WHERE published=1").fetchone()[0] == 1000
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

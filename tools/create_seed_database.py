@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-EXPECTED = {"library_words": 4213, "grammar_lessons": 100, "grammar_exercises": 1000}
+EXPECTED = {"library_words": 6280, "grammar_lessons": 100, "grammar_exercises": 1000}
 
 
 def create_seed(source: Path, destination: Path) -> None:

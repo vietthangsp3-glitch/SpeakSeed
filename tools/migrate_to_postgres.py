@@ -13,10 +13,10 @@ import sqlite3
 from pathlib import Path
 
 
-MINIMUM_SCHEMA_VERSION = "008_beta_hardening.sql"
-REQUIRED_TABLE_COUNT = 35
+MINIMUM_SCHEMA_VERSION = "021_automated_topic_classification.sql"
+REQUIRED_TABLE_COUNT = 64
 REQUIRED_PUBLISHED_CONTENT = {
-    "published_words": 4213,
+    "published_words": 6280,
     "published_grammar_lessons": 100,
     "published_grammar_exercises": 1000,
 }
@@ -155,7 +155,15 @@ def validate_release_source(plan: dict) -> None:
         )
     for key, expected in REQUIRED_PUBLISHED_CONTENT.items():
         actual = plan.get("content", {}).get(key)
-        if actual != expected:
+        # Vocabulary is an intentionally extensible catalog.  The verified 4,213
+        # records are a floor, whereas the Phase 2 grammar curriculum is a fixed
+        # release whose exact counts protect against accidental duplication.
+        if key == "published_words":
+            if actual is None or actual < expected:
+                raise RuntimeError(
+                    f"SQLite nguồn có {key}={actual}; yêu cầu tối thiểu {expected}"
+                )
+        elif actual != expected:
             raise RuntimeError(f"SQLite nguồn có {key}={actual}; yêu cầu chính xác {expected}")
 
 

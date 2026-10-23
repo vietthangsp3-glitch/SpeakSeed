@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from copy import deepcopy
 
 from migrations import run_migrations
 from tools.db_backup import backup, restore
@@ -39,7 +40,7 @@ def test_postgres_migration_plan_covers_schema_without_writing(tmp_path):
     words = next(table for table in plan["tables"] if table["name"] == "library_words")
     partial = next(sql for sql in index_ddls(words) if "idx_library_words_one_published" in sql)
     assert "WHERE reviewed=1 AND normalized_word != ''" in partial
-    assert plan["latest_schema_version"] == "008_beta_hardening.sql"
+    assert plan["latest_schema_version"] == "021_automated_topic_classification.sql"
 
 
 def test_release_postgres_preflight_accepts_verified_content():
@@ -47,12 +48,27 @@ def test_release_postgres_preflight_accepts_verified_content():
     root = Path(__file__).resolve().parents[1]
     plan = inspect(root / "speakseed.db")
     validate_release_source(plan)
-    assert len(plan["tables"]) == 35
+    assert len(plan["tables"]) == 64
     assert plan["content"] == {
-        "published_words": 4213,
+        "published_words": 6280,
         "published_grammar_lessons": 100,
         "published_grammar_exercises": 1000,
     }
+
+
+def test_release_postgres_preflight_allows_reviewed_vocabulary_growth_only():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    plan = inspect(root / "speakseed.db")
+    expanded = deepcopy(plan)
+    expanded["content"]["published_words"] = 7000
+    validate_release_source(expanded)
+
+    duplicated_grammar = deepcopy(plan)
+    duplicated_grammar["content"]["published_grammar_exercises"] = 1001
+    import pytest
+    with pytest.raises(RuntimeError, match="yêu cầu chính xác 1000"):
+        validate_release_source(duplicated_grammar)
 
 
 def test_install_seed_preserves_published_content_and_removes_accounts(tmp_path):
@@ -61,7 +77,7 @@ def test_install_seed_preserves_published_content_and_removes_accounts(tmp_path)
     create_seed(root / "speakseed.db", seed)
     with sqlite3.connect(seed) as con:
         assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
-        assert con.execute("SELECT COUNT(*) FROM library_words WHERE reviewed=1").fetchone()[0] == 4213
+        assert con.execute("SELECT COUNT(*) FROM library_words WHERE reviewed=1").fetchone()[0] == 6280
         assert con.execute("SELECT COUNT(*) FROM grammar_lessons WHERE published=1").fetchone()[0] == 100
         assert con.execute("SELECT COUNT(*) FROM grammar_exercises WHERE published=1").fetchone()[0] == 1000
 

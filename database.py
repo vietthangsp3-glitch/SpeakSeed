@@ -21,7 +21,9 @@ IDENTITY_TABLES = {
     "speaking_sessions", "writing_drafts", "learning_events", "import_runs",
     "library_words", "library_grammar", "library_sentences", "library_exercises",
     "grammar_units", "grammar_lessons", "grammar_examples", "grammar_exercises",
-    "ai_usage",
+    "ai_usage", "vocabulary_candidates", "vocabulary_candidate_events", "vocabulary_automated_releases",
+    "vocabulary_automated_topic_releases",
+    "vocabulary_publish_batches", "content_license_decisions",
 }
 
 

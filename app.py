@@ -22,6 +22,9 @@ from personalization import (
  dashboard as build_dashboard, ensure_profile, learning_path as build_learning_path,
  placement_questions, public_questions, record_event, score_placement,
 )
+from question_bank import CONTEXTS as QUESTION_CONTEXTS, check as check_bank_question
+from question_bank import public_item as public_bank_question, published_rows as published_bank_rows
+from vocabulary_release import candidate_queue, edit_candidate, edit_candidate_topics, publish_batch, require_role, review_batch, rollback_batch
 
 ROOT=Path(__file__).parent
 DB=configured_database(ROOT/'speakseed.db')
@@ -66,7 +69,7 @@ def connect():
  return connect_database(DB,timeout=15)
 
 if is_postgres(DB):
- require_postgres_schema(DB,'008_beta_hardening.sql')
+ require_postgres_schema(DB,'010_placement_order_drafts.sql')
 else:
  from tools.build_grammar import import_curriculum
  from tools.build_skills import import_skills
@@ -124,13 +127,27 @@ class ExerciseResult(BaseModel): exercise_id:int;mode:str;answer:str=Field(max_l
 class Chat(BaseModel): message:str=Field(min_length=1,max_length=700);word_id:int|None=None
 class Pronounce(BaseModel): word_id:int;wav_base64:str=Field(max_length=3_000_000)
 class GrammarAnswer(BaseModel): exercise_id:int;answer:str=Field(min_length=1,max_length=600)
-class PlacementAnswer(BaseModel): question_key:str=Field(min_length=3,max_length=80);answer:str=Field(max_length=600)
-class PlacementSubmission(BaseModel): attempt_id:int;answers:list[PlacementAnswer]=Field(min_length=25,max_length=25)
+class PlacementAnswer(BaseModel):
+ question_key:str=Field(min_length=3,max_length=80)
+ answer:str=Field(default='',max_length=1200)
+ state:str=Field(default='answered',pattern='^(in_progress|answered|skipped|audio_unavailable)$')
+class PlacementSubmission(BaseModel):
+ attempt_id:int
+ answers:list[PlacementAnswer]=Field(default_factory=list,max_length=40)
+class PlacementResponseSave(BaseModel):
+ attempt_id:int
+ question_key:str=Field(min_length=3,max_length=80)
+ answer:str=Field(default='',max_length=1200)
+ state:str=Field(default='answered',pattern='^(in_progress|answered|skipped|audio_unavailable)$')
 class ProfileUpdate(BaseModel):
  current_level:str|None=None
  daily_goal_minutes:int|None=Field(default=None,ge=5,le=180)
 class SkillAnswer(BaseModel):
  question_id:int
+ answer:str=Field(max_length=2000)
+class QuestionBankAnswer(BaseModel):
+ question_id:int
+ context:str=Field(pattern='^(placement|vocabulary|grammar|listening|reading|daily_review)$')
  answer:str=Field(max_length=2000)
 class ReadingSavedWord(BaseModel):
  lesson_id:int
@@ -146,6 +163,22 @@ class WritingDraft(BaseModel):
  content:str=Field(default='',max_length=5000)
 class WritingSubmission(BaseModel):
  draft_id:int
+class VocabularyCandidateEdit(BaseModel):
+ changes:dict[str,str]
+ reason:str=Field(min_length=3,max_length=1000)
+class VocabularyBatchReview(BaseModel):
+ candidate_ids:list[int]=Field(min_length=1,max_length=200)
+ topic_ids:dict[str,list[int]]=Field(default_factory=dict)
+ decision:str=Field(pattern='^(approve|reject|needs_revision)$')
+ reason:str=Field(min_length=3,max_length=1000)
+class VocabularyCandidateTopics(BaseModel):
+ topic_ids:list[int]=Field(min_length=1,max_length=24)
+ reason:str=Field(min_length=3,max_length=1000)
+class VocabularyBatchPublish(BaseModel):
+ candidate_ids:list[int]=Field(min_length=1,max_length=200)
+ confirm:bool=False
+class VocabularyBatchRollback(BaseModel):
+ confirm:bool=False
 
 def digest(p,s):return hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.fromhex(s),250000).hex()
 def now():return datetime.now(timezone.utc).isoformat()
@@ -183,11 +216,84 @@ def current(request:Request,authorization:str|None=Header(default=None),x_csrf_t
    raise HTTPException(403,'CSRF token không hợp lệ')
  return {key:row[key] for key in ('id','name','email')}
 
+def vocabulary_reviewer(user=Depends(current)):
+ with connect() as c:
+  try:roles=require_role(c,user['id'],{'reviewer','publisher','admin'})
+  except PermissionError:raise HTTPException(403,'Bạn không có quyền kiểm duyệt nội dung')
+ return {**user,'roles':sorted(roles)}
+
+def vocabulary_publisher(user=Depends(current)):
+ with connect() as c:
+  try:roles=require_role(c,user['id'],{'publisher','admin'})
+  except PermissionError:raise HTTPException(403,'Bạn không có quyền xuất bản nội dung')
+ return {**user,'roles':sorted(roles)}
+
 @app.get('/')
 def home():return FileResponse(ROOT/'static'/'index.html')
 
 @app.get('/favicon.ico',include_in_schema=False)
 def favicon():return Response(status_code=204)
+
+@app.get('/data-attribution',include_in_schema=False)
+def data_attribution():return FileResponse(ROOT/'static'/'data-attribution.html')
+
+@app.get('/internal/vocabulary-review',include_in_schema=False)
+def vocabulary_review_page(user=Depends(vocabulary_reviewer)):
+ if os.getenv('APP_ENV','development')=='production' and os.getenv('INTERNAL_REVIEW_ENABLED','false').lower()!='true':
+  raise HTTPException(404,'Không tìm thấy')
+ return FileResponse(ROOT/'static'/'vocabulary-review.html')
+
+@app.get('/api/internal/vocabulary/candidates')
+def vocabulary_candidate_list(request:Request,limit:int=100,offset:int=0,user=Depends(vocabulary_reviewer)):
+ allowed={'cefr','topic','source','qa','review','core','license','missing_meaning','missing_example','missing_ipa'}
+ filters={key:value for key,value in request.query_params.items() if key in allowed and value not in ('','0','false')}
+ with connect() as c:return candidate_queue(c,filters,limit,offset)
+
+@app.get('/api/internal/vocabulary/preview/{candidate_id}')
+def vocabulary_candidate_preview(candidate_id:int,user=Depends(vocabulary_reviewer)):
+ with connect() as c:
+  result=candidate_queue(c,{},200,0)
+  item=next((row for row in result['items'] if row['id']==candidate_id),None)
+  if not item:
+   row=c.execute('SELECT id FROM vocabulary_candidates WHERE id=?',(candidate_id,)).fetchone()
+   if not row:raise HTTPException(404,'Không tìm thấy ứng viên')
+   page=max(0,(candidate_id-1)//200)*200;result=candidate_queue(c,{},200,page)
+   item=next((row for row in result['items'] if row['id']==candidate_id),None)
+  if not item:raise HTTPException(404,'Không tìm thấy ứng viên')
+  return {'label':'CHƯA KIỂM DUYỆT / INTERNAL PREVIEW','persistent_progress':False,'candidate':item}
+
+@app.patch('/api/internal/vocabulary/candidates/{candidate_id}')
+def vocabulary_candidate_edit(candidate_id:int,data:VocabularyCandidateEdit,user=Depends(vocabulary_reviewer)):
+ try:
+  with connect() as c:return edit_candidate(c,candidate_id,user,data.changes,data.reason)
+ except ValueError as exc:raise HTTPException(400,str(exc))
+
+@app.put('/api/internal/vocabulary/candidates/{candidate_id}/topics')
+def vocabulary_candidate_topic_edit(candidate_id:int,data:VocabularyCandidateTopics,user=Depends(vocabulary_reviewer)):
+ try:
+  with connect() as c:return edit_candidate_topics(c,candidate_id,data.topic_ids,user,data.reason)
+ except ValueError as exc:raise HTTPException(400,str(exc))
+
+@app.post('/api/internal/vocabulary/review-batch')
+def vocabulary_candidate_review_batch(data:VocabularyBatchReview,user=Depends(vocabulary_reviewer)):
+ topic_ids={int(key):value for key,value in data.topic_ids.items()}
+ try:
+  with connect() as c:return review_batch(c,data.candidate_ids,topic_ids,user,data.decision,data.reason)
+ except ValueError as exc:raise HTTPException(400,str(exc))
+
+@app.post('/api/internal/vocabulary/publish-batch')
+def vocabulary_candidate_publish_batch(data:VocabularyBatchPublish,user=Depends(vocabulary_publisher)):
+ if not data.confirm:raise HTTPException(400,'Cần xác nhận publish riêng')
+ try:
+  with connect() as c:return publish_batch(c,data.candidate_ids,user)
+ except ValueError as exc:raise HTTPException(400,str(exc))
+
+@app.post('/api/internal/vocabulary/publish-batches/{batch_id}/rollback')
+def vocabulary_candidate_rollback_batch(batch_id:int,data:VocabularyBatchRollback,user=Depends(vocabulary_publisher)):
+ if not data.confirm:raise HTTPException(400,'Cần xác nhận rollback riêng')
+ try:
+  with connect() as c:return rollback_batch(c,batch_id,user)
+ except ValueError as exc:raise HTTPException(409,str(exc))
 
 @app.get('/api/health/live')
 def health_live():
@@ -214,7 +320,9 @@ def health_ready():
    c.execute('SELECT 1').fetchone()
    migrations=c.execute('SELECT COUNT(*) total FROM schema_migrations').fetchone()['total']
    words=c.execute('SELECT COUNT(*) total FROM library_words WHERE reviewed=1').fetchone()['total']
-  ready=migrations>=8 and words==4213
+  # Keep rollout compatible with an existing PostgreSQL deployment. The release
+  # verifier, not request startup, enforces the current 6,280-word content floor.
+  ready=migrations>=8 and words>=4213
   return JSONResponse({'status':'ready' if ready else 'degraded','database':True,
    'schema_migrations':migrations,'published_words':words},status_code=200 if ready else 503)
  except Exception:
@@ -237,7 +345,71 @@ def usage_summary(user=Depends(current)):
 def words():
  with library_db() as c:
   rows=[dict(r) for r in c.execute("SELECT id,word,meaning,ipa,pos,example,example_vi,topic,emoji,stage FROM library_words WHERE reviewed=1 ORDER BY CASE stage WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 WHEN 'A2' THEN 2 WHEN 'B1' THEN 3 WHEN 'B2' THEN 4 END,word")]
+  _attach_word_topics(c,rows)
  return rows if rows else [dict(w,stage=['A0','A1.1','A1.2','A2.1','A2.2','B1'][min(5,i//6)]) for i,w in enumerate(WORD_DICT.values())]
+
+def _attach_word_topics(c,rows):
+ ids={row['id'] for row in rows}
+ for row in rows:row['topic_slugs']=[]
+ if not ids:return rows
+ # Read only mappings explicitly published by the topic review gate. Staging mappings
+ # and enrichment values never reach learner payloads.
+ mapping={word_id:[] for word_id in ids}
+ for item in c.execute('''SELECT tw.word_id,t.slug FROM vocabulary_topic_words tw
+  JOIN vocabulary_topics t ON t.id=tw.topic_id
+  JOIN library_words w ON w.id=tw.word_id
+  WHERE tw.published=1 AND t.active=1 AND w.reviewed=1'''):
+  if item['word_id'] in mapping:mapping[item['word_id']].append(item['slug'])
+ for row in rows:row['topic_slugs']=mapping[row['id']]
+ for row in rows:row.update({'synonyms':[],'definitions_en':[],'enriched_examples_en':[]})
+ enrichment={word_id:{'synonym':[],'definition_en':[],'example_en':[]} for word_id in ids}
+ for item in c.execute('''SELECT v.word_id,v.field_name,v.value_json FROM word_enrichment_values v
+  WHERE v.review_status='human_reviewed' AND v.quality_status='automated_checked'
+    AND EXISTS(SELECT 1 FROM word_enrichment_events e WHERE e.candidate_id=v.candidate_id
+      AND e.action='approve' AND trim(e.reviewer_name)<>'')'''):
+  if item['word_id'] not in enrichment or item['field_name'] not in enrichment[item['word_id']]:continue
+  try:value=json.loads(item['value_json'])
+  except (TypeError,ValueError):continue
+  if isinstance(value,str) and value.strip():enrichment[item['word_id']][item['field_name']].append(value.strip())
+ for row in rows:
+  values=enrichment[row['id']];row['synonyms']=values['synonym'][:8]
+  row['definitions_en']=values['definition_en'][:5];row['enriched_examples_en']=values['example_en'][:5]
+ return rows
+
+@app.get('/api/vocabulary/topics')
+def vocabulary_topics():
+ with connect() as c:
+  topics=[dict(row) for row in c.execute('''SELECT id,slug,name_en,name_vi,description_vi,icon,parent_id
+   FROM vocabulary_topics WHERE active=1 ORDER BY id''')]
+  counts={}
+  for row in c.execute('''SELECT t.slug,w.stage,COUNT(DISTINCT w.id) total
+   FROM vocabulary_topics t
+   LEFT JOIN vocabulary_topic_words tw ON tw.topic_id=t.id AND tw.published=1
+   LEFT JOIN library_words w ON w.id=tw.word_id AND w.reviewed=1
+   WHERE t.active=1 GROUP BY t.slug,w.stage'''):
+   if row['stage']:counts.setdefault(row['slug'],{})[row['stage']]=row['total']
+  for topic in topics:
+   topic['levels']=counts.get(topic['slug'],{})
+   topic['published_words']=sum(topic['levels'].values())
+  unclassified=c.execute('''SELECT COUNT(*) total FROM library_words w WHERE w.reviewed=1 AND NOT EXISTS(
+   SELECT 1 FROM vocabulary_topic_words tw WHERE tw.word_id=w.id AND tw.published=1)''').fetchone()['total']
+  published=c.execute('SELECT COUNT(*) total FROM library_words WHERE reviewed=1').fetchone()['total']
+ return {'topics':topics,'published_words':published,
+         'classified_words':published-unclassified,'unclassified_words':unclassified,
+         'mapping_note':'Nhãn existing_published được kế thừa từ trường topic đã phát hành; không phải tuyên bố human-reviewed.'}
+
+@app.get('/api/vocabulary/topic-progress')
+def vocabulary_topic_progress(user=Depends(current)):
+ with connect() as c:
+  rows=c.execute('''SELECT t.slug,COUNT(DISTINCT tw.word_id) total,
+   COUNT(DISTINCT CASE WHEN p.level>0 THEN tw.word_id END) started,
+   COUNT(DISTINCT CASE WHEN p.level>=3 THEN tw.word_id END) remembered
+   FROM vocabulary_topics t
+   LEFT JOIN vocabulary_topic_words tw ON tw.topic_id=t.id AND tw.published=1
+   LEFT JOIN library_words w ON w.id=tw.word_id AND w.reviewed=1
+   LEFT JOIN progress p ON p.word_id=tw.word_id AND p.user_id=?
+   WHERE t.active=1 GROUP BY t.id,t.slug ORDER BY t.id''',(user['id'],)).fetchall()
+ return [dict(row) for row in rows]
 @app.post('/api/register')
 def register(data:Register,response:Response,request:Request):
  email=data.email.strip().lower(); name=data.name.strip()
@@ -287,12 +459,47 @@ def me(user=Depends(current)):return user
 def placement_start(user=Depends(current)):
  stamp=now()
  with connect() as c:
+  for active in c.execute("SELECT * FROM placement_attempts WHERE user_id=? AND status='started' ORDER BY id DESC",(user['id'],)):
+   saved_questions=json.loads(active['questions_json'])
+   if len(saved_questions)==40 and all('section' in item for item in saved_questions):
+    responses={row['question_key']:{'answer':row['answer'],'state':row['state']} for row in c.execute(
+     'SELECT question_key,answer,state FROM placement_responses WHERE attempt_id=? AND user_id=?',(active['id'],user['id']))}
+    return {'attempt_id':active['id'],'question_count':40,'questions':public_questions(saved_questions),
+            'responses':responses,'resumed':True,'limitation':PLACEMENT_LIMITATION}
   questions=placement_questions(c)
   cur=c.execute('''INSERT INTO placement_attempts(user_id,questions_json,started_at)
    VALUES(?,?,?)''',(user['id'],json.dumps(questions,ensure_ascii=False),stamp))
   attempt_id=cur.lastrowid
  return {'attempt_id':attempt_id,'question_count':len(questions),'questions':public_questions(questions),
-         'limitation':PLACEMENT_LIMITATION}
+         'responses':{},'resumed':False,'limitation':PLACEMENT_LIMITATION}
+
+@app.post('/api/placement/answer')
+def placement_save_answer(data:PlacementResponseSave,user=Depends(current)):
+ stamp=now()
+ with connect() as c:
+  attempt=c.execute("SELECT questions_json FROM placement_attempts WHERE id=? AND user_id=? AND status='started'",
+                    (data.attempt_id,user['id'])).fetchone()
+  if not attempt:raise HTTPException(404,'Không tìm thấy bài placement đang làm')
+  questions={item['key']:item for item in json.loads(attempt['questions_json'])}
+  question=questions.get(data.question_key)
+  if not question:raise HTTPException(404,'Câu hỏi không thuộc bài placement này')
+  if data.state=='audio_unavailable' and question.get('section')!='listening':
+   raise HTTPException(400,'Chỉ câu Listening mới có trạng thái lỗi audio')
+  if data.state=='answered' and not data.answer.strip():raise HTTPException(400,'Câu trả lời không được để trống')
+  c.execute('''INSERT INTO placement_responses(attempt_id,user_id,question_key,answer,state,updated_at)
+   VALUES(?,?,?,?,?,?) ON CONFLICT(attempt_id,question_key) DO UPDATE SET
+   answer=excluded.answer,state=excluded.state,updated_at=excluded.updated_at''',
+   (data.attempt_id,user['id'],data.question_key,data.answer.strip(),data.state,stamp))
+ return {'saved':True,'question_key':data.question_key,'state':data.state,'saved_at':stamp}
+
+@app.get('/api/placement/audio/{attempt_id}/{question_key}')
+def placement_audio(attempt_id:int,question_key:str,user=Depends(current)):
+ with connect() as c:
+  attempt=c.execute('SELECT questions_json FROM placement_attempts WHERE id=? AND user_id=?',(attempt_id,user['id'])).fetchone()
+  if not attempt:raise HTTPException(404,'Không tìm thấy bài placement')
+  question=next((item for item in json.loads(attempt['questions_json']) if item['key']==question_key),None)
+  if not question or question.get('section')!='listening':raise HTTPException(404,'Không tìm thấy audio Listening')
+ return JSONResponse({'text':question['audio_text'],'language':'en-US'},headers={'Cache-Control':'private, no-store'})
 
 @app.post('/api/placement/submit')
 def placement_submit(data:PlacementSubmission,user=Depends(current)):
@@ -302,18 +509,47 @@ def placement_submit(data:PlacementSubmission,user=Depends(current)):
   if not attempt:raise HTTPException(404,'Không tìm thấy lượt placement test')
   if attempt['status']!='started':raise HTTPException(409,'Lượt placement test này đã hoàn thành')
   questions=json.loads(attempt['questions_json'])
-  try:result=score_placement(questions,[x.model_dump() for x in data.answers])
+  for answer in data.answers:
+   c.execute('''INSERT INTO placement_responses(attempt_id,user_id,question_key,answer,state,updated_at)
+    VALUES(?,?,?,?,?,?) ON CONFLICT(attempt_id,question_key) DO UPDATE SET
+    answer=excluded.answer,state=excluded.state,updated_at=excluded.updated_at''',
+    (data.attempt_id,user['id'],answer.question_key,answer.answer.strip(),answer.state,stamp))
+  saved=[dict(row) for row in c.execute('''SELECT question_key,answer,state FROM placement_responses
+   WHERE attempt_id=? AND user_id=?''',(data.attempt_id,user['id']))]
+  try:result=score_placement(questions,saved)
   except ValueError as exc:raise HTTPException(400,str(exc))
   checked=result.pop('checked_answers')
   c.execute('''UPDATE placement_attempts SET status='completed',answers_json=?,score_json=?,
-   recommended_level=?,completed_at=? WHERE id=? AND status='started' ''',
-   (json.dumps(checked,ensure_ascii=False),json.dumps(result,ensure_ascii=False),result['recommended_level'],stamp,data.attempt_id))
+   recommended_level=?,completed_at=? WHERE id=? AND user_id=? AND status='started' ''',
+   (json.dumps(checked,ensure_ascii=False),json.dumps(result,ensure_ascii=False),result['recommended_level'],stamp,data.attempt_id,user['id']))
   profile=ensure_profile(c,user['id'],stamp)
   current=result['recommended_level'] if not profile['placement_completed_at'] else profile['current_level']
   c.execute('''UPDATE learner_profiles SET recommended_level=?,current_level=?,
    placement_completed_at=?,updated_at=? WHERE user_id=?''',
    (result['recommended_level'],current,stamp,stamp,user['id']))
  return {'attempt_id':data.attempt_id,**result,'current_level':current}
+
+@app.get('/api/placement/history')
+def placement_history(user=Depends(current)):
+ with connect() as c:
+  rows=c.execute('''SELECT id,status,score_json,recommended_level,started_at,completed_at
+   FROM placement_attempts WHERE user_id=? AND status='completed' ORDER BY completed_at DESC,id DESC LIMIT 20''',(user['id'],)).fetchall()
+ output=[]
+ for row in rows:
+  score=json.loads(row['score_json'] or '{}')
+  output.append({'attempt_id':row['id'],'status':row['status'],'recommended_level':row['recommended_level'],
+                 'total_correct':score.get('total_correct'),'total':score.get('total'),
+                 'weighted_score':score.get('weighted_score'),'started_at':row['started_at'],'completed_at':row['completed_at']})
+ return {'attempts':output}
+
+@app.get('/api/placement/review/{attempt_id}')
+def placement_review(attempt_id:int,user=Depends(current)):
+ with connect() as c:
+  row=c.execute('SELECT * FROM placement_attempts WHERE id=? AND user_id=?',(attempt_id,user['id'])).fetchone()
+ if not row:raise HTTPException(404,'Không tìm thấy kết quả placement')
+ if row['status']!='completed':raise HTTPException(409,'Bài placement chưa hoàn thành')
+ return {'attempt_id':row['id'],'status':row['status'],'completed_at':row['completed_at'],
+         'recommended_level':row['recommended_level'],**json.loads(row['score_json'] or '{}')}
 
 @app.get('/api/placement/latest')
 def placement_latest(user=Depends(current)):
@@ -323,6 +559,65 @@ def placement_latest(user=Depends(current)):
  if not row:return {'attempt':None,'limitation':PLACEMENT_LIMITATION}
  data=dict(row);data['score']=json.loads(data.pop('score_json')) if data['status']=='completed' else None
  return {'attempt':data,'limitation':PLACEMENT_LIMITATION}
+
+@app.get('/api/question-bank/questions')
+def question_bank_questions(context:str,level:str|None=None,limit:int=20,user=Depends(current)):
+ if context not in QUESTION_CONTEXTS:raise HTTPException(400,'Ngữ cảnh luyện tập không hợp lệ')
+ if level is not None and level not in LEVELS:raise HTTPException(400,'Cấp độ CEFR không hợp lệ')
+ if limit<1 or limit>100:raise HTTPException(400,'Giới hạn phải từ 1 đến 100')
+ try:
+  with connect() as c:rows=published_bank_rows(c,context,level=level,limit=limit)
+ except Exception as exc:
+  if 'question_bank' in str(exc).lower() or 'does not exist' in str(exc).lower() or 'no such table' in str(exc).lower():
+   raise HTTPException(503,'Ngân hàng câu hỏi mới chưa được kích hoạt')
+  raise
+ return {'context':context,'questions':[public_bank_question(row) for row in rows],
+         'count':len(rows),'published_only':True}
+
+@app.get('/api/question-bank/audio/{question_id}')
+def question_bank_audio(question_id:int,context:str='listening',user=Depends(current)):
+ if context not in QUESTION_CONTEXTS:raise HTTPException(400,'Ngữ cảnh luyện tập không hợp lệ')
+ try:
+  with connect() as c:
+   row=c.execute('''SELECT d.* FROM question_bank_drafts d
+    JOIN question_qa_results q ON q.question_id=d.id AND q.overall_status='pass'
+    WHERE d.id=? AND d.published=1 AND d.review_status='human_reviewed' AND d.skill='listening'
+      AND EXISTS(SELECT 1 FROM question_bank_links l WHERE l.question_id=d.id AND l.learning_context=?) ''',
+    (question_id,context)).fetchone()
+ except Exception as exc:
+  if 'question_bank' in str(exc).lower() or 'does not exist' in str(exc).lower() or 'no such table' in str(exc).lower():
+   raise HTTPException(503,'Ngân hàng câu hỏi mới chưa được kích hoạt')
+  raise
+ if not row:raise HTTPException(404,'Không tìm thấy bài nghe đã xuất bản')
+ payload=_json_field(row['payload_json'],{})
+ transcript=str(payload.get('transcript') or row['context_text'] or '').strip()
+ if not transcript:raise HTTPException(409,'Bài nghe chưa có transcript hợp lệ')
+ # Web Speech requires text in the browser. It is returned privately but is not shown as a
+ # transcript by the learner UI until the answer has been submitted.
+ return JSONResponse({'text':transcript,'language':'en-US','engine':'web-speech'},
+                     headers={'Cache-Control':'private, no-store'})
+
+@app.post('/api/question-bank/check')
+def question_bank_check(data:QuestionBankAnswer,user=Depends(current)):
+ if data.context not in QUESTION_CONTEXTS:raise HTTPException(400,'Ngữ cảnh luyện tập không hợp lệ')
+ stamp=now()
+ try:
+  with connect() as c:
+   row=c.execute('''SELECT d.* FROM question_bank_drafts d
+    JOIN question_qa_results q ON q.question_id=d.id AND q.overall_status='pass'
+    WHERE d.id=? AND d.published=1 AND d.review_status='human_reviewed'
+      AND EXISTS(SELECT 1 FROM question_bank_links l WHERE l.question_id=d.id AND l.learning_context=?) ''',
+    (data.question_id,data.context)).fetchone()
+   if not row:raise HTTPException(404,'Không tìm thấy câu hỏi đã xuất bản')
+   result=check_bank_question(row,data.answer)
+   c.execute('''INSERT INTO question_bank_attempts(user_id,question_id,learning_context,answer,correct,submitted_at)
+    VALUES(?,?,?,?,?,?)''',(user['id'],data.question_id,data.context,data.answer,int(result['correct']),stamp))
+ except HTTPException:raise
+ except Exception as exc:
+  if 'question_bank' in str(exc).lower() or 'does not exist' in str(exc).lower() or 'no such table' in str(exc).lower():
+   raise HTTPException(503,'Ngân hàng câu hỏi mới chưa được kích hoạt')
+  raise
+ return result
 
 @app.post('/api/profile')
 def update_profile(data:ProfileUpdate,user=Depends(current)):
@@ -378,8 +673,9 @@ def save(data:Result,user=Depends(current)):
 def review_queue(limit:int=50,user=Depends(current)):
  limit=max(1,min(limit,100))
  with connect() as c:
-  rows=c.execute('''SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage,p.due_at,p.repetitions,p.lapses FROM progress p JOIN library_words w ON w.id=p.word_id WHERE p.user_id=? AND w.reviewed=1 AND p.due_at<=? ORDER BY p.due_at LIMIT ?''',(user['id'],now(),limit)).fetchall()
- return [dict(r) for r in rows]
+  rows=[dict(r) for r in c.execute('''SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage,p.due_at,p.repetitions,p.lapses FROM progress p JOIN library_words w ON w.id=p.word_id WHERE p.user_id=? AND w.reviewed=1 AND p.due_at<=? ORDER BY p.due_at LIMIT ?''',(user['id'],now(),limit)).fetchall()]
+  _attach_word_topics(c,rows)
+ return rows
 
 @app.get('/api/lessons')
 def lessons():

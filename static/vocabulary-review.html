@@ -1,0 +1,17 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SpeakSeed — Internal Vocabulary Review</title><link rel="stylesheet" href="/static/style.css?v=10"></head>
+<body class="review-body"><main class="review-shell">
+<header><div><p class="eyebrow">INTERNAL TOOL</p><h1>Kiểm duyệt Core Vocabulary</h1><p>Không tự động publish. Approval và publish là hai hành động riêng.</p></div><a class="outline" href="/">Về ứng dụng</a></header>
+<div class="preview-warning">CHƯA KIỂM DUYỆT / INTERNAL PREVIEW — Không ghi SRS hoặc tiến độ người học.</div>
+<section class="review-filters" aria-label="Bộ lọc">
+<select id="rLevel"><option value="">Mọi CEFR</option><option>A0</option><option>A1</option><option>A2</option><option>B1</option><option>B2</option></select>
+<select id="rTopic"><option value="">Mọi topic</option></select><input id="rSource" placeholder="Source key">
+<select id="rLicense"><option value="">Mọi license status</option><option>pass</option><option>conditional</option><option>blocked</option></select>
+<select id="rQa"><option value="">Mọi QA</option><option>pass</option><option>warn</option><option>fail</option></select>
+<select id="rCore"><option value="">Mọi Core status</option><option value="review_ready">Review ready</option><option value="needs_data">Needs data</option><option value="license_blocked">License blocked</option><option value="duplicate">Duplicate warning</option><option value="invalid">Invalid</option></select>
+<select id="rReview"><option value="">Mọi review status</option><option>pending</option><option>needs_revision</option><option>human_reviewed</option><option>rejected</option></select>
+<label><input id="rMissingMeaning" type="checkbox"> Thiếu nghĩa</label><label><input id="rMissingExample" type="checkbox"> Thiếu ví dụ</label><label><input id="rMissingIpa" type="checkbox"> Thiếu IPA</label>
+<button class="primary" id="rLoad">Lọc</button></section>
+<section class="review-actions"><span id="rCount">0 ứng viên</span><input id="rReason" placeholder="Lý do kiểm duyệt bắt buộc"><button id="rApprove">Approve đã chọn</button><button id="rNeeds">Needs revision</button><button id="rReject">Reject</button><button class="danger" id="rPublish">Publish đã duyệt</button></section>
+<div id="rMessage" role="status" aria-live="polite"></div><section id="rList" class="review-grid"></section>
+</main><script src="/static/vocabulary-review.js?v=1"></script></body></html>

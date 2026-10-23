@@ -1,6 +1,7 @@
-"""Import openly licensed language datasets into SpeakSeed SQLite.
-Imported content defaults to reviewed=0. Review before publication.
-Usage: python import_data.py cefrj-vocab path.csv [--publish]
+"""Legacy draft importer retained for compatibility.
+
+New imports should use ``tools/content_pipeline.py``. This command can only
+write unpublished legacy drafts; direct publication is intentionally blocked.
 """
 import argparse,csv,sqlite3,json,re,sys
 from pathlib import Path
@@ -23,9 +24,13 @@ def pick(row,*keys):
  return ''
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('source',choices=['cefrj-vocab','cefrj-grammar','words-cefr','openjam','kaikki','tatoeba']);p.add_argument('file');p.add_argument('--publish',action='store_true',help='Only for human-reviewed content with verified rights');p.add_argument('--language',default='vi');p.add_argument('--limit',type=int,default=50000);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('source',choices=['cefrj-vocab','cefrj-grammar','words-cefr','openjam','kaikki','tatoeba']);p.add_argument('file');p.add_argument('--publish',action='store_true',help=argparse.SUPPRESS);p.add_argument('--language',default='vi');p.add_argument('--limit',type=int,default=50000);a=p.parse_args()
+ if a.publish:
+  p.error('Direct publication is disabled. Use tools/content_pipeline.py, review staging records, and publish through an audited workflow.')
+ if a.source in {'words-cefr','openjam','kaikki','tatoeba'}:
+  p.error(f"Legacy source {a.source!r} is license/quality gated. Use tools/content_pipeline.py after reviewing DATA_SOURCE_AUDIT.md.")
  con=sqlite3.connect(ROOT/'speakseed.db'); con.execute('PRAGMA busy_timeout=15000')
- published=int(a.publish);inserted=0;skipped=0
+ published=0;inserted=0;skipped=0
  def word(w,level,meaning='',ipa='',example='',pos='',sourceid='',license=''):
   nonlocal inserted,skipped
   w=w.strip().lower();level=normlevel(level)
@@ -70,8 +75,8 @@ def main():
     except json.JSONDecodeError:skipped+=1;continue
     if r.get('lang_code')!='en':continue
     ipa=next((x.get('ipa','') for x in r.get('sounds',[]) if x.get('ipa')),'')
-    # Kaikki doesn't reliably provide CEFR/VI translation; imported as draft A1.1 only.
-    word(r.get('word',''),'A1.1',ipa=ipa,pos=r.get('pos',''),license='Wiktionary CC BY-SA / GFDL; attribution and share-alike obligations')
+    # No CEFR can be inferred from Kaikki. The new staging pipeline must be used.
+    skipped+=1
  elif a.source=='tatoeba':
   # TSV: id<TAB>language_code<TAB>sentence; English only; optional translations require joining a separate links export.
   with open(a.file,encoding='utf-8') as f:
@@ -81,6 +86,6 @@ def main():
     if len(cols)<3 or cols[1]!='eng':continue
     sentence=cols[2].strip()
     if not sentence or len(sentence)>250:continue
-    con.execute('INSERT OR IGNORE INTO library_sentences(english,level,source,source_id,license,reviewed) VALUES(?,?,?,?,?,?)',(sentence,'A1.1','tatoeba',cols[0],'Tatoeba: verify per-sentence CC BY 2.0 FR / CC0',0));inserted+=1
+    con.execute('INSERT OR IGNORE INTO library_sentences(english,level,source,source_id,license,reviewed) VALUES(?,?,?,?,?,?)',(sentence,'unverified','tatoeba',cols[0],'Tatoeba text: per-record attribution/license verification required; audio is separate',0));inserted+=1
  con.commit();con.close();print(f'Imported/updated: {inserted}; skipped: {skipped}. Unreviewed content is hidden until verified and published.')
 if __name__=='__main__':main()

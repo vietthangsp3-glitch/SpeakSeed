@@ -75,11 +75,37 @@ def run(base_url: str, output_dir: Path, headed: bool = False) -> dict:
 
         def placement():
             page.locator('[data-view="placement"]').click(); page.locator("#beginPlacement").click()
-            for _ in range(25):
-                page.locator("[data-placement-answer]").first.wait_for(); page.locator("[data-placement-answer]").first.click()
+            played_audio = False
+            for index in range(40):
+                page.wait_for_function("""()=>document.querySelector('[data-placement-answer],#placementTextForm,[data-order-token],#orderSave')!==null""")
+                current_label = page.locator(".placement-progress b").inner_text()
+                if page.locator("#playPlacementAudio").count() and not played_audio:
+                    with page.expect_response(lambda response: "/api/placement/audio/" in response.url) as pending:
+                        page.locator("#playPlacementAudio").click()
+                    assert pending.value.status == 200; played_audio = True
+                if page.locator("[data-placement-answer]").count():
+                    page.locator("[data-placement-answer]").first.click()
+                elif page.locator("#placementTextForm").count():
+                    page.locator("#placementText").fill("stage6 answer"); page.locator("#placementTextForm button").click()
+                else:
+                    for _ in range(30):
+                        tokens = page.locator("[data-order-token]")
+                        if page.locator("#orderSave:not([disabled])").count(): break
+                        if not tokens.count(): page.wait_for_timeout(100); continue
+                        old_count = tokens.count()
+                        with page.expect_response(lambda response: response.url.endswith("/api/placement/answer")) as pending:
+                            tokens.first.click()
+                        assert pending.value.status == 200
+                        page.wait_for_function("count=>document.querySelectorAll('[data-order-token]').length<count || !document.querySelector('#orderSave')?.disabled", arg=old_count)
+                    page.locator("#orderSave:not([disabled])").wait_for()
+                    page.locator("#orderSave").click()
+                if index < 39:
+                    page.wait_for_function("label=>document.querySelector('.placement-progress b')?.textContent!==label", arg=current_label)
+            page.locator("#submitPlacement").click()
             page.get_by_text("Cấp độ bắt đầu được đề xuất").wait_for()
-            return page.locator(".level-badge").inner_text()
-        step("placement_25_questions", placement)
+            assert page.locator(".placement-review").count() == 40
+            return {"level": page.locator(".level-badge").inner_text(), "audio_played": played_audio}
+        step("placement_40_mixed_questions", placement)
 
         def vocabulary():
             page.locator('[data-view="learn"]').click(); page.locator("#reveal").click()
@@ -90,6 +116,20 @@ def run(base_url: str, output_dir: Path, headed: bool = False) -> dict:
             assert page.locator(".progressrow").count() >= 1
             return "SRS progress visible"
         step("vocabulary_srs", vocabulary)
+
+        def vocabulary_topics():
+            page.locator('[data-view="learn"]').click()
+            page.locator('[data-vocab-mode="topic"]').click()
+            page.locator(".vocab-topic-grid").wait_for()
+            assert page.locator(".vocab-topic-card").count() == 24
+            available = page.locator(".vocab-topic-card:not([disabled])")
+            available_count = available.count(); assert available_count > 0
+            available.first.click(); page.locator(".flash").wait_for()
+            page.locator("#vocabSearch").fill(page.locator(".flash h2").inner_text()[:3])
+            page.locator("#cardDirection").select_option("vi-en")
+            assert page.locator(".flash").is_visible()
+            return {"topics": 24, "available_at_level": available_count, "direction": "vi-en"}
+        step("vocabulary_topic_learning", vocabulary_topics)
 
         def grammar():
             page.locator('[data-view="grammar"]').click(); page.locator(".lesson-card").first.click()

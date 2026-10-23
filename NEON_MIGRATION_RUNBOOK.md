@@ -1,5 +1,10 @@
 # SpeakSeed: SQLite → Neon PostgreSQL
 
+> Current release note (2026-10-24): production is still at schema 008 and 4,213
+> words. Follow the ordered 009–021 migration and 6,280-word sync commands in
+> `VOCABULARY_6280_DEPLOYMENT_REPORT.md`; do not push the Vercel-linked branch
+> before that database verification succeeds.
+
 Quy trình này là thao tác một lần, chạy thủ công từ Windows PowerShell. Ứng dụng Vercel **không** tự tạo hoặc tự migration schema khi cold start.
 
 ## Điều kiện trước khi chạy
@@ -35,8 +40,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Preflight SQLite thất bại; không tiếp t
 Kết quả đúng của bản hiện tại phải chứa:
 
 ```text
-"tables": 35
-"latest_schema_version": "008_beta_hardening.sql"
+"tables": 36
+"latest_schema_version": "010_placement_order_drafts.sql"
 "published_words": 4213
 "published_grammar_lessons": 100
 "published_grammar_exercises": 1000
@@ -90,8 +95,8 @@ Kết quả đạt yêu cầu:
 
 ```text
 "ok": true
-"tables": 35
-"latest_schema_version": "008_beta_hardening.sql"
+"tables": 36
+"latest_schema_version": "010_placement_order_drafts.sql"
 "published_content": {
   "published_words": 4213,
   "published_grammar_lessons": 100,
@@ -99,7 +104,25 @@ Kết quả đạt yêu cầu:
 }
 ```
 
-Verifier so sánh tập bảng, count và SHA-256 nội dung từng bảng, số foreign key, index, version và ba số lượng nội dung xuất bản. Bảng `schema_migrations` phải có đủ tám version từ `001_initial.sql` đến `008_beta_hardening.sql`.
+Verifier so sánh tập bảng, count và SHA-256 nội dung từng bảng, số foreign key, index, version và ba số lượng nội dung xuất bản. Bảng `schema_migrations` phải có đủ mười version từ `001_initial.sql` đến `010_placement_order_drafts.sql`.
+
+## Nâng Neon hiện có từ schema 008 (không copy lại database)
+
+Không dùng `migrate_to_postgres.py --apply` với database đang có dữ liệu. Công cụ đó chỉ chấp nhận target trống. Sau khi backup/branch Neon đã được người vận hành xác nhận, chạy preflight chỉ đọc:
+
+```powershell
+python -X utf8 .\tools\apply_postgres_placement_v2.py
+if ($LASTEXITCODE -ne 0) { throw 'Placement v2 preflight thất bại; không tiếp tục.' }
+```
+
+Output phải là `"status": "dry_run"`, version đích `010_placement_order_drafts.sql`, kèm count `users_to_preserve` và `placement_attempts_to_preserve`. Sau khi xác nhận đúng branch/database, mới chạy:
+
+```powershell
+python -X utf8 .\tools\apply_postgres_placement_v2.py --apply
+if ($LASTEXITCODE -ne 0) { throw 'Migration placement v2 thất bại; không redeploy.' }
+```
+
+Công cụ chỉ thêm `placement_responses`, index và hai migration marker `009`/`010` trong một transaction; nó đối chiếu count `users` và `placement_attempts` trước khi commit. Không xóa hay copy lại nội dung/người dùng.
 
 ## 7. Dọn secret khỏi process local
 
@@ -127,7 +150,7 @@ Kết quả mong đợi:
 ```text
 status            ready
 database          True
-schema_migrations 8
+schema_migrations 10
 published_words   4213
 ```
 

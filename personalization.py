@@ -3,16 +3,24 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from question_bank import placement_form
+
 LEVELS = ("A0", "A1", "A2", "B1", "B2")
 LEVEL_RANK = {level: index for index, level in enumerate(LEVELS)}
 PLACEMENT_LIMITATION = (
-    "Kết quả chỉ là gợi ý xếp lớp nhanh dựa trên 25 câu từ vựng và ngữ pháp. "
-    "Bài kiểm tra không đo đầy đủ nghe, nói, đọc, viết và không phải chứng chỉ CEFR."
+    "Kết quả là ước tính nội bộ từ 40 câu grammar, vocabulary, listening và reading. "
+    "Bài này không đánh giá speaking hay writing tự do và không phải chứng chỉ CEFR."
 )
+
+PLACEMENT_SECTION_WEIGHTS = {
+    "grammar": .20, "vocabulary": .10, "listening": .25,
+    "fill_blank": .15, "sentence_ordering": .10, "reading": .20,
+}
 
 
 def normalize(text: str) -> str:
@@ -27,43 +35,70 @@ def ensure_profile(con, user_id: int, stamp: str) -> dict:
     return dict(con.execute("SELECT * FROM learner_profiles WHERE user_id=?", (user_id,)).fetchone())
 
 
-def placement_questions(con) -> list[dict]:
-    """Build a deterministic 25-item test from published, reviewed content."""
-    questions: list[dict] = []
-    grammar_by_level: dict[str, list] = defaultdict(list)
-    rows = con.execute(
-        """SELECT e.id,e.level,e.prompt,e.options_json,e.answers_json
-           FROM grammar_exercises e JOIN grammar_lessons l ON l.id=e.lesson_id
-           WHERE e.published=1 AND l.published=1 AND e.kind='multiple_choice'
-           ORDER BY e.level,l.sequence,e.sequence"""
-    ).fetchall()
-    for row in rows:
-        grammar_by_level[row["level"]].append(row)
-    for level in LEVELS:
-        pool = grammar_by_level[level]
-        if len(pool) < 3:
-            raise RuntimeError(f"Không đủ câu grammar placement cho {level}")
-        indexes = (0, len(pool) // 2, len(pool) - 1)
-        for row in (pool[index] for index in indexes):
-            questions.append({
-                "key": f"grammar:{row['id']}", "domain": "grammar", "level": level,
-                "prompt": row["prompt"], "options": json.loads(row["options_json"]),
-                "answers": json.loads(row["answers_json"]),
-            })
+def _spread(rows: list, count: int) -> list:
+    """Pick deterministic, well-spaced records without changing source data."""
+    if len(rows) < count:
+        raise RuntimeError(f"Không đủ nội dung placement: cần {count}, có {len(rows)}")
+    if count == 1:
+        return [rows[len(rows) // 2]]
+    return [rows[round(index * (len(rows) - 1) / (count - 1))] for index in range(count)]
 
-    # CEFR-J vocabulary starts at A1, so A0 is assessed by grammar only.
-    vocab_targets = {"A1": 3, "A2": 3, "B1": 2, "B2": 2}
-    for level, target in vocab_targets.items():
+
+def _grammar_items(con, kind: str, targets: dict[str, int], section: str) -> list[dict]:
+    output = []
+    for level, target in targets.items():
         rows = con.execute(
-            """SELECT id,word,meaning,pos FROM library_words
-               WHERE reviewed=1 AND stage=? ORDER BY quality_score DESC,id""",
-            (level,),
+            """SELECT e.id,e.lesson_id,e.level,e.prompt,e.options_json,e.answers_json,
+                      e.explanation_vi,e.source,e.review_status,l.title,l.topic
+               FROM grammar_exercises e JOIN grammar_lessons l ON l.id=e.lesson_id
+               WHERE e.published=1 AND l.published=1 AND e.kind=? AND e.level=?
+               ORDER BY l.sequence,e.sequence,e.id""", (kind, level)
         ).fetchall()
-        if len(rows) < 12:
-            raise RuntimeError(f"Không đủ từ placement cho {level}")
-        step = max(1, len(rows) // target)
-        selected = [rows[min(i * step + step // 2, len(rows) - 1)] for i in range(target)]
-        for offset, row in enumerate(selected):
+        for row in _spread(list(rows), target):
+            answers = json.loads(row["answers_json"])
+            item = {
+                "key": f"{section}:{row['id']}", "section": section,
+                "domain": "grammar", "kind": kind, "level": level,
+                "topic": row["topic"], "prompt": row["prompt"],
+                "options": json.loads(row["options_json"]), "answers": answers,
+                "explanation_vi": row["explanation_vi"], "source": row["source"],
+                "review_status": row["review_status"], "lesson_id": row["lesson_id"],
+                "lesson_title": row["title"],
+            }
+            if kind == "sentence_ordering":
+                tail = row["prompt"].rsplit(":", 1)[-1]
+                item["tokens"] = [token.strip() for token in tail.split("/") if token.strip()]
+            if kind == "fill_blank":
+                item["completed_sentence"] = row["prompt"].replace("___", answers[0])
+            output.append(item)
+    return output
+
+
+def placement_questions(con) -> list[dict]:
+    """Build the deterministic, balanced 40-item Placement Test v2."""
+    if os.getenv("QUESTION_BANK_PLACEMENT_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+        bank_form = placement_form(con)
+        if bank_form is not None:
+            return bank_form
+    questions = _grammar_items(
+        con, "multiple_choice", {"A0": 3, "A1": 1, "A2": 1, "B1": 1, "B2": 1}, "grammar"
+    )
+
+    # The reviewed CEFR vocabulary bank starts at A1. A0 evidence comes from
+    # grammar/listening/reading instead of inventing A0 vocabulary records.
+    curated_vocab = {
+        "A1": ("expensive", "tooth"), "A2": ("printer",),
+        "B1": ("bilingual",), "B2": ("campaign",),
+    }
+    for level, terms in curated_vocab.items():
+        rows = list(con.execute(
+            """SELECT id,word,meaning,pos,topic,source,license,reviewed
+               FROM library_words WHERE reviewed=1 AND stage=? AND word IN (""" +
+            ",".join("?" for _ in terms) + ") ORDER BY word", (level, *terms)
+        ).fetchall())
+        if {row["word"] for row in rows} != set(terms):
+            raise RuntimeError(f"Thiếu từ vựng placement đã chọn cho {level}")
+        for offset, row in enumerate(rows):
             distractors = con.execute(
                 """SELECT meaning FROM library_words
                    WHERE reviewed=1 AND stage=? AND id<>? AND meaning<>? AND pos=?
@@ -78,55 +113,159 @@ def placement_questions(con) -> list[dict]:
                     (level, row["id"], row["meaning"]),
                 ).fetchall()
             options = [row["meaning"], *[x["meaning"] for x in distractors]]
-            # Deterministic rotation prevents the correct option always being first.
             rotation = row["id"] % len(options)
-            options = options[rotation:] + options[:rotation]
             questions.append({
-                "key": f"vocab:{row['id']}", "domain": "vocabulary", "level": level,
-                "prompt": f"Từ “{row['word']}” có nghĩa nào?", "options": options,
-                "answers": [row["meaning"]],
+                "key": f"vocabulary:{row['id']}", "section": "vocabulary",
+                "domain": "vocabulary", "kind": "multiple_choice", "level": level,
+                "topic": row["topic"], "prompt": f"Từ “{row['word']}” có nghĩa nào?",
+                "options": options[rotation:] + options[:rotation], "answers": [row["meaning"]],
+                "explanation_vi": f"“{row['word']}” có nghĩa là “{row['meaning']}”.",
+                "source": row["source"], "license": row["license"],
+                "review_status": "automated_checked", "word_id": row["id"],
             })
-    questions.sort(key=lambda item: (LEVEL_RANK[item["level"]], item["domain"], item["key"]))
-    if len(questions) != 25:
-        raise RuntimeError(f"Placement test phải có 25 câu, hiện có {len(questions)}")
+
+    listening_targets = {"A0": 2, "A1": 2, "A2": 2, "B1": 1, "B2": 1}
+    for level, target in listening_targets.items():
+        by_kind = {}
+        for kind in ("multiple_choice", "fill_blank"):
+            by_kind[kind] = list(con.execute(
+                """SELECT q.id,q.lesson_id,q.kind,q.prompt,q.options_json,q.answers_json,q.explanation_vi,
+                          l.title,l.level,l.transcript_en,l.source,l.license,l.review_status
+                   FROM skill_questions q JOIN skill_lessons l ON l.id=q.lesson_id
+                   WHERE l.skill='listening' AND l.level=? AND l.published=1 AND q.kind=?
+                   ORDER BY l.sequence,q.sequence""", (level, kind)
+            ).fetchall())
+        kinds = ["multiple_choice", "fill_blank"] if target == 2 else ["multiple_choice" if LEVEL_RANK[level] % 2 else "fill_blank"]
+        for kind_index, kind in enumerate(kinds):
+            pool = by_kind[kind]
+            position = round((kind_index + 1) * (len(pool) - 1) / (len(kinds) + 1)) if len(kinds) > 1 else len(pool) // 2
+            row = pool[position]
+            questions.append({
+                "key": f"listening:{row['id']}", "section": "listening", "domain": "listening",
+                "kind": "listening_" + row["kind"], "level": level, "topic": row["title"],
+                "prompt": row["prompt"], "options": json.loads(row["options_json"]),
+                "answers": json.loads(row["answers_json"]), "audio_text": row["transcript_en"],
+                "transcript_en": row["transcript_en"], "explanation_vi": row["explanation_vi"],
+                "source": row["source"], "license": row["license"],
+                "review_status": row["review_status"], "lesson_id": row["lesson_id"],
+                "lesson_title": row["title"],
+            })
+
+    questions.extend(_grammar_items(
+        con, "fill_blank", {"A0": 1, "A1": 1, "A2": 2, "B1": 2, "B2": 2}, "fill_blank"
+    ))
+    questions.extend(_grammar_items(
+        con, "sentence_ordering", {"A0": 1, "A1": 1, "A2": 1, "B1": 1, "B2": 2}, "sentence_ordering"
+    ))
+
+    for level, target in {"A0": 1, "A1": 1, "A2": 1, "B1": 2, "B2": 1}.items():
+        rows = list(con.execute(
+            """SELECT q.id,q.lesson_id,q.prompt,q.options_json,q.answers_json,q.explanation_vi,
+                      l.title,l.level,l.content_en,l.source,l.license,l.review_status
+               FROM skill_questions q JOIN skill_lessons l ON l.id=q.lesson_id
+               WHERE l.skill='reading' AND l.level=? AND l.published=1
+               ORDER BY l.sequence,q.sequence""", (level,)
+        ).fetchall())
+        for row in _spread(rows, target):
+            questions.append({
+                "key": f"reading:{row['id']}", "section": "reading", "domain": "reading",
+                "kind": "reading_comprehension", "level": level, "topic": row["title"],
+                "prompt": row["prompt"], "options": json.loads(row["options_json"]),
+                "answers": json.loads(row["answers_json"]), "passage_en": row["content_en"],
+                "explanation_vi": row["explanation_vi"], "source": row["source"],
+                "license": row["license"], "review_status": row["review_status"],
+                "lesson_id": row["lesson_id"], "lesson_title": row["title"],
+            })
+
+    section_order = {name: index for index, name in enumerate(PLACEMENT_SECTION_WEIGHTS)}
+    questions.sort(key=lambda item: (LEVEL_RANK[item["level"]], section_order[item["section"]], item["key"]))
+    if len(questions) != 40:
+        raise RuntimeError(f"Placement test phải có 40 câu, hiện có {len(questions)}")
     return questions
 
 
 def public_questions(questions: list[dict]) -> list[dict]:
-    return [{key: value for key, value in item.items() if key != "answers"} for item in questions]
+    hidden = {"answers", "explanation_vi", "audio_text", "transcript_en", "completed_sentence"}
+    return [{key: value for key, value in item.items() if key not in hidden} for item in questions]
 
 
 def score_placement(questions: list[dict], submitted: list[dict]) -> dict:
     expected = {item["key"]: item for item in questions}
-    answers = {item.get("question_key"): item.get("answer", "") for item in submitted}
-    if len(answers) != len(submitted) or set(answers) != set(expected):
-        raise ValueError("Phải trả lời đúng một lần cho toàn bộ 25 câu")
-    detail = {}
-    total_correct = 0
+    responses = {item.get("question_key"): item for item in submitted}
+    if len(responses) != len(submitted) or set(responses) != set(expected):
+        raise ValueError("Cần trả lời, bỏ qua hoặc báo lỗi audio cho đủ 40 câu")
+    if any(item.get("state", "answered") not in ("answered", "skipped", "audio_unavailable")
+           for item in responses.values()):
+        raise ValueError("Một số câu sắp xếp chưa hoàn tất")
+    by_level_raw = {level: {"correct": 0, "total": 0} for level in LEVELS}
+    by_section_raw = {name: {"correct": 0, "total": 0, "unavailable": 0} for name in PLACEMENT_SECTION_WEIGHTS}
+    topics = defaultdict(lambda: [0, 0])
     checked = []
-    for level in LEVELS:
-        level_questions = [item for item in questions if item["level"] == level]
-        correct = 0
-        for item in level_questions:
-            is_correct = any(normalize(answers[item["key"]]) == normalize(value) for value in item["answers"])
-            correct += int(is_correct)
-            checked.append({"question_key": item["key"], "answer": answers[item["key"]], "correct": is_correct})
-        total_correct += correct
-        detail[level] = {"correct": correct, "total": len(level_questions), "accuracy": round(correct / len(level_questions), 3)}
+    for item in questions:
+        response = responses[item["key"]]
+        state = response.get("state", "answered")
+        answer = str(response.get("answer", ""))
+        unavailable = state == "audio_unavailable" and item["section"] == "listening"
+        is_correct = False if state != "answered" else any(normalize(answer) == normalize(value) for value in item["answers"])
+        section = by_section_raw[item["section"]]
+        if unavailable:
+            section["unavailable"] += 1
+        else:
+            section["total"] += 1; section["correct"] += int(is_correct)
+            by_level_raw[item["level"]]["total"] += 1
+            by_level_raw[item["level"]]["correct"] += int(is_correct)
+            topics[item["topic"]][1] += 1; topics[item["topic"]][0] += int(is_correct)
+        checked.append({
+            "question_key": item["key"], "section": item["section"], "kind": item["kind"],
+            "level": item["level"], "topic": item["topic"], "prompt": item["prompt"],
+            "user_answer": answer, "state": state, "correct": is_correct,
+            "correct_answers": item["answers"], "explanation_vi": item["explanation_vi"],
+            "completed_sentence": item.get("completed_sentence"),
+            "transcript_en": item.get("transcript_en"), "passage_en": item.get("passage_en"),
+            "source": item.get("source", ""), "license": item.get("license", ""),
+        })
+    by_level = {level: {**values, "accuracy": round(values["correct"] / values["total"], 3) if values["total"] else None}
+                for level, values in by_level_raw.items()}
+    by_section = {name: {**values, "accuracy": round(values["correct"] / values["total"], 3) if values["total"] else None,
+                         "weight": PLACEMENT_SECTION_WEIGHTS[name]}
+                  for name, values in by_section_raw.items()}
+    available_weight = sum(PLACEMENT_SECTION_WEIGHTS[name] for name, value in by_section.items() if value["total"])
+    weighted_score = sum((value["accuracy"] or 0) * PLACEMENT_SECTION_WEIGHTS[name]
+                         for name, value in by_section.items() if value["total"])
+    weighted_score = weighted_score / available_weight if available_weight else 0
 
-    # Recommend the first level not yet securely demonstrated. This is placement,
-    # not a claim that the learner has certified mastery of lower levels.
     recommended = "A0"
-    thresholds = {"A0": 0.5, "A1": 0.6, "A2": 0.6, "B1": 0.6, "B2": 0.7}
-    for index, level in enumerate(LEVELS):
-        if detail[level]["accuracy"] < thresholds[level]:
-            recommended = level
+    gates = {"A0": .55, "A1": .58, "A2": .60, "B1": .65}
+    for level in ("A0", "A1", "A2", "B1"):
+        accuracy = by_level[level]["accuracy"]
+        if accuracy is None or accuracy < gates[level]:
             break
-        recommended = LEVELS[min(index + 1, len(LEVELS) - 1)]
+        recommended = LEVELS[LEVEL_RANK[level] + 1]
+    strong_topics = [{"topic": name, "accuracy": round(ok / total, 3), "total": total}
+                     for name, (ok, total) in topics.items() if total and ok / total >= .75]
+    weak_topics = [{"topic": name, "accuracy": round(ok / total, 3), "total": total}
+                   for name, (ok, total) in topics.items() if total and ok / total < .6]
+    recommendations = []
+    seen = set()
+    for item, result in zip(questions, checked):
+        if result["correct"] or result["state"] == "audio_unavailable":
+            continue
+        key = (item["section"], item.get("lesson_id"), item["topic"])
+        if key in seen:
+            continue
+        seen.add(key)
+        recommendations.append({"section": item["section"], "topic": item["topic"],
+                                "lesson_id": item.get("lesson_id"), "lesson_title": item.get("lesson_title", "")})
     return {
-        "total_correct": total_correct, "total": len(questions),
-        "accuracy": round(total_correct / len(questions), 3),
-        "by_level": detail, "recommended_level": recommended,
+        "version": 2, "total_correct": sum(x["correct"] for x in by_section_raw.values()),
+        "total": sum(x["total"] for x in by_section_raw.values()),
+        "question_count": len(questions), "weighted_score": round(weighted_score, 3),
+        "by_level": by_level, "by_section": by_section, "recommended_level": recommended,
+        "strong_topics": sorted(strong_topics, key=lambda x: (-x["accuracy"], x["topic"]))[:8],
+        "weak_topics": sorted(weak_topics, key=lambda x: (x["accuracy"], x["topic"]))[:8],
+        "recommendations": recommendations[:8], "details": checked,
+        "audio_unavailable": by_section["listening"]["unavailable"],
+        "confidence": "reduced" if by_section["listening"]["unavailable"] else "standard",
         "limitation": PLACEMENT_LIMITATION, "checked_answers": checked,
     }
 

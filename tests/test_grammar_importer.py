@@ -50,7 +50,7 @@ def test_production_grammar_links_existing_vocabulary():
     con = sqlite3.connect(app.DB)
     vocab_count = con.execute("SELECT COUNT(*) FROM library_words WHERE reviewed=1").fetchone()[0]
     linked = con.execute("SELECT COUNT(DISTINCT exercise_id) FROM grammar_exercise_words").fetchone()[0]
-    assert vocab_count == 4213
+    assert vocab_count == 6280
     assert linked >= 900
 
 

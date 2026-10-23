@@ -44,16 +44,20 @@ def answers_for_attempt(database, attempt_id, wrong=False):
     ]
 
 
-def test_placement_uses_25_real_questions_and_does_not_leak_answers(tmp_path, monkeypatch):
+def test_placement_uses_40_balanced_real_questions_and_does_not_leak_answers(tmp_path, monkeypatch):
     client, database = setup_client(tmp_path, monkeypatch)
     headers = register(client)
     started = client.post("/api/placement/start", headers=headers)
     assert started.status_code == 200
     data = started.json()
-    assert data["question_count"] == len(data["questions"]) == 25
-    assert {item["domain"] for item in data["questions"]} == {"grammar", "vocabulary"}
+    assert data["question_count"] == len(data["questions"]) == 40
+    assert {item["domain"] for item in data["questions"]} == {"grammar", "vocabulary", "listening", "reading"}
+    assert {item["section"] for item in data["questions"]} == {
+        "grammar", "vocabulary", "listening", "fill_blank", "sentence_ordering", "reading"
+    }
     assert {item["level"] for item in data["questions"]} == {"A0", "A1", "A2", "B1", "B2"}
-    assert all("answers" not in item and len(item["options"]) >= 2 for item in data["questions"])
+    assert all("answers" not in item and "explanation_vi" not in item and "transcript_en" not in item
+               and "audio_text" not in item for item in data["questions"])
     assert "không phải chứng chỉ CEFR" in data["limitation"]
 
     result = client.post(
@@ -61,7 +65,7 @@ def test_placement_uses_25_real_questions_and_does_not_leak_answers(tmp_path, mo
         json={"attempt_id": data["attempt_id"], "answers": answers_for_attempt(database, data["attempt_id"])},
     )
     assert result.status_code == 200
-    assert result.json()["total_correct"] == 25
+    assert result.json()["total_correct"] == 40
     assert result.json()["recommended_level"] == "B2"
     assert result.json()["current_level"] == "B2"
     assert client.post(
