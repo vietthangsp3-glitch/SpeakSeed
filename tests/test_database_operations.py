@@ -4,7 +4,7 @@ import sqlite3
 from migrations import run_migrations
 from tools.db_backup import backup, restore
 from tools.create_seed_database import create_seed
-from tools.migrate_to_postgres import index_ddls, inspect, table_ddl
+from tools.migrate_to_postgres import index_ddls, inspect, table_ddl, validate_release_source
 from database import HybridRow, _postgres_sql
 
 
@@ -39,6 +39,20 @@ def test_postgres_migration_plan_covers_schema_without_writing(tmp_path):
     words = next(table for table in plan["tables"] if table["name"] == "library_words")
     partial = next(sql for sql in index_ddls(words) if "idx_library_words_one_published" in sql)
     assert "WHERE reviewed=1 AND normalized_word != ''" in partial
+    assert plan["latest_schema_version"] == "008_beta_hardening.sql"
+
+
+def test_release_postgres_preflight_accepts_verified_content():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    plan = inspect(root / "speakseed.db")
+    validate_release_source(plan)
+    assert len(plan["tables"]) == 35
+    assert plan["content"] == {
+        "published_words": 4213,
+        "published_grammar_lessons": 100,
+        "published_grammar_exercises": 1000,
+    }
 
 
 def test_install_seed_preserves_published_content_and_removes_accounts(tmp_path):

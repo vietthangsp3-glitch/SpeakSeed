@@ -13,6 +13,15 @@ import sqlite3
 from pathlib import Path
 
 
+MINIMUM_SCHEMA_VERSION = "008_beta_hardening.sql"
+REQUIRED_TABLE_COUNT = 35
+REQUIRED_PUBLISHED_CONTENT = {
+    "published_words": 4213,
+    "published_grammar_lessons": 100,
+    "published_grammar_exercises": 1000,
+}
+
+
 def qi(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
@@ -64,9 +73,24 @@ def inspect(source: Path) -> dict:
                                          "origin": idx[3], "where": where})
             tables.append({"name": name, "count": con.execute(f"SELECT COUNT(*) FROM {qi(name)}").fetchone()[0],
                            "columns": columns, "foreign_keys": foreign_keys, "indexes": indexes})
+        latest = con.execute(
+            "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        content = {
+            "published_words": con.execute(
+                "SELECT COUNT(*) FROM library_words WHERE reviewed=1"
+            ).fetchone()[0],
+            "published_grammar_lessons": con.execute(
+                "SELECT COUNT(*) FROM grammar_lessons WHERE published=1"
+            ).fetchone()[0],
+            "published_grammar_exercises": con.execute(
+                "SELECT COUNT(*) FROM grammar_exercises WHERE published=1"
+            ).fetchone()[0],
+        }
         return {"source": str(source.resolve()), "tables": tables,
                 "total_rows": sum(table["count"] for table in tables),
-                "foreign_keys": sum(len(table["foreign_keys"]) for table in tables)}
+                "foreign_keys": sum(len(table["foreign_keys"]) for table in tables),
+                "latest_schema_version": latest[0] if latest else "", "content": content}
     finally:
         con.close()
 
@@ -117,6 +141,24 @@ def index_ddls(table: dict) -> list[str]:
     return result
 
 
+def validate_release_source(plan: dict) -> None:
+    """Refuse an incomplete release database before opening the target."""
+    names = {table["name"] for table in plan["tables"]}
+    if len(names) < REQUIRED_TABLE_COUNT or "schema_migrations" not in names:
+        raise RuntimeError(
+            f"SQLite nguồn chưa đủ schema: {len(names)}/{REQUIRED_TABLE_COUNT} bảng"
+        )
+    if plan.get("latest_schema_version", "") < MINIMUM_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"SQLite nguồn cần schema tối thiểu {MINIMUM_SCHEMA_VERSION}; "
+            f"hiện có {plan.get('latest_schema_version') or 'none'}"
+        )
+    for key, expected in REQUIRED_PUBLISHED_CONTENT.items():
+        actual = plan.get("content", {}).get(key)
+        if actual != expected:
+            raise RuntimeError(f"SQLite nguồn có {key}={actual}; yêu cầu chính xác {expected}")
+
+
 def apply(source: Path, target_url: str, plan: dict) -> None:
     try:
         import psycopg
@@ -160,8 +202,11 @@ def main() -> None:
         args.plan_json.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"mode": "apply" if args.apply else "plan", "source": plan["source"],
                       "tables": len(plan["tables"]), "rows": plan["total_rows"],
-                      "foreign_keys": plan["foreign_keys"]}, ensure_ascii=True))
+                      "foreign_keys": plan["foreign_keys"],
+                      "latest_schema_version": plan["latest_schema_version"],
+                      "content": plan["content"]}, ensure_ascii=True))
     if args.apply:
+        validate_release_source(plan)
         target_url=args.target_url or os.getenv("DATABASE_URL", "").strip()
         if not target_url or not target_url.startswith(("postgresql://", "postgres://")):
             raise SystemExit("Set DATABASE_URL or pass a valid PostgreSQL --target-url with --apply")

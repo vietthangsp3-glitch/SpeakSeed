@@ -10,7 +10,14 @@ from pathlib import Path
 
 import psycopg
 
-from migrate_to_postgres import inspect, qi
+from migrate_to_postgres import (
+    MINIMUM_SCHEMA_VERSION,
+    REQUIRED_PUBLISHED_CONTENT,
+    REQUIRED_TABLE_COUNT,
+    inspect,
+    qi,
+    validate_release_source,
+)
 
 
 def normalize(value):
@@ -30,6 +37,7 @@ def digest_rows(rows) -> str:
 
 def verify(source: Path, target_url: str) -> dict:
     plan = inspect(source)
+    validate_release_source(plan)
     sqlite_con = sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True)
     failures = []
     with psycopg.connect(target_url) as pg:
@@ -66,9 +74,28 @@ def verify(source: Path, target_url: str) -> dict:
                                          else f'uq_{table["name"]}_' + "_".join(index["columns"]))
             missing_indexes = sorted(expected_indexes - pg_indexes)
             if missing_indexes: failures.append({"missing_indexes": missing_indexes})
+            cursor.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
+            latest_schema = cursor.fetchone()
+            target_content = {}
+            for key, query in {
+                "published_words": "SELECT COUNT(*) FROM library_words WHERE reviewed=1",
+                "published_grammar_lessons": "SELECT COUNT(*) FROM grammar_lessons WHERE published=1",
+                "published_grammar_exercises": "SELECT COUNT(*) FROM grammar_exercises WHERE published=1",
+            }.items():
+                cursor.execute(query); target_content[key] = cursor.fetchone()[0]
+            if len(pg_tables) < REQUIRED_TABLE_COUNT:
+                failures.append({"table_count": {"minimum": REQUIRED_TABLE_COUNT, "actual": len(pg_tables)}})
+            if not latest_schema or latest_schema[0] < MINIMUM_SCHEMA_VERSION:
+                failures.append({"schema_version": {"minimum": MINIMUM_SCHEMA_VERSION,
+                                                     "actual": latest_schema[0] if latest_schema else None}})
+            if target_content != REQUIRED_PUBLISHED_CONTENT:
+                failures.append({"published_content": {"expected": REQUIRED_PUBLISHED_CONTENT,
+                                                        "actual": target_content}})
     sqlite_con.close()
     return {"ok": not failures, "tables": len(plan["tables"]), "rows": plan["total_rows"],
             "foreign_keys": planned_foreign_keys, "expected_indexes": len(expected_indexes),
+            "latest_schema_version": latest_schema[0] if latest_schema else None,
+            "published_content": target_content,
             "table_results": table_results, "failures": failures}
 
 
@@ -82,5 +109,8 @@ if __name__ == "__main__":
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(text, encoding="utf-8")
-    print(json.dumps({key: result[key] for key in ("ok", "tables", "rows", "foreign_keys", "expected_indexes")}, ensure_ascii=True))
+    print(json.dumps({key: result[key] for key in (
+        "ok", "tables", "rows", "foreign_keys", "expected_indexes",
+        "latest_schema_version", "published_content"
+    )}, ensure_ascii=True))
     if not result["ok"]: raise SystemExit(1)
