@@ -198,7 +198,7 @@ def test_unconfigured_advanced_pronunciation_does_not_start_provider_usage(tmp_p
     response = client.post("/api/pronunciation", headers={"Authorization": "Bearer " + token},
                            json={"word_id": word_id, "wav_base64": "not-used"})
     assert response.status_code == 503
-    assert "Basic Practice" in response.json()["detail"]
+    assert "Luyện nói cơ bản" in response.json()["detail"]
     with sqlite3.connect(database) as con:
         assert con.execute("SELECT COUNT(*) FROM ai_usage").fetchone()[0] == 0
 
@@ -290,7 +290,7 @@ def test_gemini_provider_quota_error_has_no_automatic_retry(tmp_path, monkeypatc
         "word_id": word_id, "target_kind": "word", "audio_base64": fake_webm(12),
         "mime_type": "audio/webm", "duration_ms": 1000})
     assert response.status_code == 429 and len(calls) == 1
-    assert "Basic Practice" in response.json()["detail"]
+    assert "Luyện nói cơ bản" in response.json()["detail"]
 
 
 def test_production_cookie_hsts_cors_and_trusted_host(tmp_path, monkeypatch):
@@ -365,7 +365,7 @@ def test_legacy_tts_endpoint_is_hard_disabled_without_usage_or_provider_call(tmp
     monkeypatch.setattr(application.urllib.request, "urlopen", forbidden_provider_call)
     response = client.post("/api/tts", json={"text": "Hello", "voice": "Kore", "speed": 1})
     assert response.status_code == 410
-    assert "Web Speech API" in response.json()["detail"]
+    assert "nút Nghe" in response.json()["detail"]
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM ai_usage WHERE feature='tts'").fetchone()[0] == 0
 
@@ -386,5 +386,5 @@ def test_beginner_ai_limits_are_account_scoped_and_explain_non_ai_continuity(tmp
         con.executemany("INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,created_at) VALUES(?,?,'tutor','succeeded','test',?)", [(user_id, f"h{i}", created) for i in range(10)])
     response = client.post("/api/chat", headers={"Authorization": "Bearer " + token}, json={"message": "Hello"})
     assert response.status_code == 429
-    assert "Từ vựng, ngữ pháp, nghe và đọc vẫn dùng bình thường" in response.json()["detail"]
+    assert "từ vựng, ngữ pháp, nghe và đọc vẫn hoạt động bình thường" in response.json()["detail"]
 

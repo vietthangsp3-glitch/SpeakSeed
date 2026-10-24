@@ -39,7 +39,7 @@ def ensure_profile(con, user_id: int, stamp: str) -> dict:
 def _sample(rows: list, count: int, rng: random.Random, excluded: set[str], key_prefix: str) -> list:
     """Prefer unseen records, then fill from the complete reviewed pool."""
     if len(rows) < count:
-        raise RuntimeError(f"Không đủ nội dung placement: cần {count}, có {len(rows)}")
+        raise RuntimeError(f"Không đủ câu hỏi kiểm tra: cần {count}, có {len(rows)}")
     unseen = [row for row in rows if f"{key_prefix}:{row['id']}" not in excluded]
     seen = [row for row in rows if f"{key_prefix}:{row['id']}" in excluded]
     rng.shuffle(unseen); rng.shuffle(seen)
@@ -174,7 +174,7 @@ def placement_questions(con, excluded_keys: set[str] | None = None, seed: int | 
 
     rng.shuffle(questions)
     if len(questions) != 40:
-        raise RuntimeError(f"Placement test phải có 40 câu, hiện có {len(questions)}")
+        raise RuntimeError(f"Bài kiểm tra đầu vào phải có 40 câu, hiện có {len(questions)}")
     return questions
 
 
@@ -389,7 +389,7 @@ def learning_path(con, user_id: int, stamp: str) -> dict:
         "level": level, "lessons": lessons, "next_lesson": next_lesson,
         "skill_paths": skill_paths, "journey": journey,
         "weak_skills": weak_skills(con, user_id),
-        "unlock_rule": "Mỗi chuỗi bài mở từ bài đầu. Bài tiếp theo chỉ được đề xuất sau khi backend có bằng chứng hoàn thành bài trước.",
+        "unlock_rule": "Mỗi chuỗi bắt đầu từ bài đầu tiên. Hoàn thành một bài để mở gợi ý cho bài tiếp theo.",
     }
 
 
@@ -465,7 +465,7 @@ def daily_plan(con, user_id: int, stamp: str) -> dict:
                        "completed": target > 0 and completed_count >= target})
     return {"date": today, "level": level, "items": output,
             "completed": all(item["target"] == 0 or item["completed"] for item in output),
-            "evidence_note": "Chỉ hoạt động đã được backend ghi nhận mới được tính hoàn thành. Ở A0–A1, Speaking và Writing AI là tùy chọn, không nằm trong kế hoạch bắt buộc."}
+            "evidence_note": "Một mục chỉ được đánh dấu hoàn thành sau khi bạn thực hiện hoạt động học. Ở A0–A1, luyện nói và phản hồi viết nâng cao là tùy chọn."}
 
 
 def dashboard(con, user_id: int, stamp: str) -> dict:
@@ -567,5 +567,5 @@ def dashboard(con, user_id: int, stamp: str) -> dict:
         "daily_plan": daily_plan(con, user_id, stamp),
         "weak_skills": path["weak_skills"], "next_lesson": path["next_lesson"],
         "journey": path["journey"], "achievements": achievements,
-        "accuracy_note": "Độ chính xác chỉ tính các lượt đã được backend chấm; chưa có dữ liệu thì hiển thị chưa đủ dữ liệu.",
+        "accuracy_note": "Độ chính xác được tính từ các bài đã làm; khi chưa đủ dữ liệu, SpeakSeed sẽ chưa đưa ra nhận xét.",
     }

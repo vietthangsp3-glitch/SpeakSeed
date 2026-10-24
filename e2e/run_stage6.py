@@ -172,7 +172,7 @@ def run(base_url: str, output_dir: Path, headed: bool = False) -> dict:
             else: page.locator('[data-view="skills"]').click()
             page.locator('[data-skill-tab="speaking"]').click(); page.locator(".skill-card:not([disabled])").first.click(); page.locator("#startTurnTask").wait_for(); page.locator("#startTurnTask").click()
             page.locator("#speakingText").fill("Hello, I would like to practise this task."); page.locator("#speakingForm button").click()
-            page.wait_for_function("status => status.textContent !== 'Gemini đang trả lời...'", arg=page.locator("#speakStatus").element_handle(), timeout=10000)
+            page.wait_for_function("status => status.textContent !== 'Đang chuẩn bị câu trả lời…'", arg=page.locator("#speakStatus").element_handle(), timeout=10000)
             status = page.locator("#speakStatus").inner_text(); assert "Đã trả lời" not in status
             return status
         step("speaking_provider_failure_not_complete", speaking_failure_not_complete)

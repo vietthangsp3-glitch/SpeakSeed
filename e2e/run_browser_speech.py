@@ -78,13 +78,13 @@ def run(base_url: str, output: Path) -> dict:
         results.append({"name": "listening_reading_browser_speech_without_tts", "status": "PASS"})
 
         page.locator('[data-view="conversation"]').click()
-        assert page.get_by_text("Gemini Live sử dụng quota API", exact=False).is_visible()
+        assert page.get_by_text("Hội thoại trực tiếp hiện chưa khả dụng", exact=False).is_visible()
         page.locator("#speakingMode").select_option("live")
         page.once("dialog", lambda dialog: dialog.dismiss())
         page.locator("#startSpeaking").click()
         assert not websocket_urls
         assert any(message in page.locator("#speakStatus").inner_text()
-                   for message in ("Chưa kết nối", "đang tắt"))
+                   for message in ("Chưa bắt đầu", "chưa khả dụng"))
         results.append({"name": "live_requires_explicit_confirm_and_no_auto_connect", "status": "PASS"})
 
         page.set_viewport_size({"width": 390, "height": 844}); page.reload(wait_until="networkidle")
@@ -110,9 +110,9 @@ def run(base_url: str, output: Path) -> dict:
         unsupported_page = unsupported.new_page(); unsupported_tts: list[str] = []
         unsupported_page.on("request", lambda request: unsupported_tts.append(request.url) if "/api/tts" in request.url else None)
         unsupported_page.goto(base_url, wait_until="networkidle"); unsupported_page.locator('[data-view="learn"]').click()
-        assert "không hỗ trợ Web Speech API" in unsupported_page.locator('[data-speech-status]').inner_text()
+        assert "chưa hỗ trợ đọc thành tiếng" in unsupported_page.locator('[data-speech-status]').inner_text()
         unsupported_page.locator("#listen").click()
-        assert "không hỗ trợ Web Speech API" in unsupported_page.locator("#toast").inner_text()
+        assert "chưa hỗ trợ đọc thành tiếng" in unsupported_page.locator("#toast").inner_text()
         assert not unsupported_tts
         results.append({"name": "unsupported_web_speech_never_falls_back_to_gemini", "status": "PASS"})
         unsupported.close()
@@ -133,7 +133,7 @@ def run(base_url: str, output: Path) -> dict:
         ) else None)
         recognition_page.goto(base_url, wait_until="networkidle")
         recognition_page.locator('[data-view="speak"]').click()
-        assert recognition_page.get_by_text("MIỄN PHÍ · BASIC PRACTICE", exact=True).is_visible()
+        assert recognition_page.get_by_text("MIỄN PHÍ · LUYỆN NÓI CƠ BẢN", exact=True).is_visible()
         assert recognition_page.locator("#advancedMic").is_disabled()
         recognition_page.locator("#basicMic").click()
         recognition_page.get_by_text("Mức khớp nội dung nhận diện:", exact=False).wait_for()
@@ -153,7 +153,7 @@ def run(base_url: str, output: Path) -> dict:
         """)
         denied_page = denied.new_page(); denied_page.goto(base_url, wait_until="networkidle")
         denied_page.locator('[data-view="speak"]').click(); denied_page.locator("#basicMic").click()
-        assert "từ chối quyền microphone" in denied_page.locator("#basicStatus").inner_text()
+        assert "từ chối quyền micro" in denied_page.locator("#basicStatus").inner_text()
         results.append({"name": "basic_recognition_permission_denied_message", "status": "PASS"})
         denied.close()
 
@@ -165,7 +165,7 @@ def run(base_url: str, output: Path) -> dict:
         no_recognition_page = no_recognition.new_page(); no_recognition_page.goto(base_url, wait_until="networkidle")
         no_recognition_page.locator('[data-view="speak"]').click()
         assert no_recognition_page.locator("#basicMic").is_disabled()
-        assert "không hỗ trợ Web Speech Recognition" in no_recognition_page.locator("#basicStatus").inner_text()
+        assert "chưa hỗ trợ nhận diện giọng nói" in no_recognition_page.locator("#basicStatus").inner_text()
         results.append({"name": "unsupported_recognition_has_honest_fallback", "status": "PASS"})
         no_recognition.close()
 
@@ -211,11 +211,11 @@ def run(base_url: str, output: Path) -> dict:
         gemini_page.locator("#authSubmit").click()
         gemini_page.get_by_role("button", name="Đăng xuất", exact=True).wait_for(timeout=15000)
         gemini_page.locator('[data-view="speak"]').click()
-        assert gemini_page.get_by_text("GEMINI AI · ĐÃ BẬT", exact=True).is_visible()
+        assert gemini_page.get_by_text("PHẢN HỒI NÂNG CAO · SẴN SÀNG", exact=True).is_visible()
         assert not assessment_requests
         gemini_page.locator("#geminiRecord").click(); gemini_page.wait_for_timeout(400)
         gemini_page.locator("#geminiStop").click()
-        gemini_page.get_by_text("Hãy nghe lại trước khi chấm", exact=False).wait_for()
+        gemini_page.get_by_text("Hãy nghe lại trước khi nhận phản hồi", exact=False).wait_for()
         assert gemini_page.locator("#geminiAssess").is_enabled() and not assessment_requests
         gemini_page.locator("#geminiAssess").click()
         gemini_page.get_by_text("Bản ghi nghe rõ.", exact=True).wait_for()

@@ -151,7 +151,7 @@ def start_ai_usage(con, *, user_id: int | None, ip: str, feature: str, model: st
             con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,error_code,created_at,finished_at)
                 VALUES(?,?,?,'quota_rejected',?,?, 'account_limit',?,?)""",
                 (user_id, ip_digest, feature, model, input_units, stamp(), stamp()))
-            raise HTTPException(429, "Bạn đã dùng hết lượt AI của tính năng này trong khoảng thời gian hiện tại. Từ vựng, ngữ pháp, nghe và đọc vẫn dùng bình thường; hãy thử AI lại sau.", headers={"Retry-After": str(window_seconds)})
+            raise HTTPException(429, "Bạn đã sử dụng hết lượt của tính năng này. Vui lòng thử lại sau; từ vựng, ngữ pháp, nghe và đọc vẫn hoạt động bình thường.", headers={"Retry-After": str(window_seconds)})
     params = (ip_digest, feature, since, model_scope) if model_scope else (ip_digest, feature, since)
     count = con.execute(f"""SELECT COUNT(*) total FROM ai_usage WHERE ip_hash=? AND feature=?
         AND created_at>=? AND status<>'quota_rejected'{model_clause}""", params).fetchone()["total"]
@@ -159,13 +159,13 @@ def start_ai_usage(con, *, user_id: int | None, ip: str, feature: str, model: st
         con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,error_code,created_at,finished_at)
             VALUES(?,?,?,'quota_rejected',?,?, 'ip_limit',?,?)""",
             (user_id, ip_digest, feature, model, input_units, stamp(), stamp()))
-        raise HTTPException(429, "Thiết bị đã dùng hết lượt AI của tính năng này trong khoảng thời gian hiện tại. Các bài học không dùng AI vẫn hoạt động bình thường; hãy thử AI lại sau.", headers={"Retry-After": str(window_seconds)})
+        raise HTTPException(429, "Thiết bị này đã sử dụng hết lượt của tính năng. Vui lòng thử lại sau; các bài học khác vẫn hoạt động bình thường.", headers={"Retry-After": str(window_seconds)})
     if request_fingerprint:
         cursor = con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,created_at,request_fingerprint)
             VALUES(?,?,?,'started',?,?,?,?) ON CONFLICT DO NOTHING""",
             (user_id, ip_digest, feature, model, input_units, stamp(), request_fingerprint))
         if cursor.rowcount == 0 or cursor.lastrowid is None:
-            raise HTTPException(409, "Bản ghi âm này đã được gửi hoặc đang được xử lý. Không gửi lại để tránh tốn quota.")
+            raise HTTPException(409, "Bản ghi âm này đã được gửi hoặc đang được xử lý. Hãy chờ kết quả trước khi thử lại.")
     else:
         # Keep all existing AI features operational during the safe rollout
         # window before migration 023 is explicitly applied to PostgreSQL.

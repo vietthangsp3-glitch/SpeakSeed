@@ -40,6 +40,7 @@ def test_frontend_does_not_contain_provider_key_name():
     assert "fetch('/api/tts'" not in javascript
     assert "speechSynthesis" in javascript
     assert 'min="0.75" max="1.25"' in javascript
-    assert "Gemini Live sử dụng quota API" in javascript
+    assert "Gemini Live sử dụng quota API" not in javascript
+    assert "Hội thoại trực tiếp hiện chưa khả dụng" in javascript
     assert "window.confirm" in javascript
     assert "pagehide" in javascript and "beforeunload" in javascript

@@ -89,7 +89,7 @@ def test_live_quota_is_rejected_before_provider_connection(tmp_path, monkeypatch
 
     with client.websocket_connect("/ws/speaking/live", headers={"Origin": "http://localhost:8000"}) as socket:
         socket.send_json({"token": token, "level": "A1", "topic": "Daily life"})
-        assert "quota" in socket.receive_json()["error"].lower()
+        assert "hết lượt" in socket.receive_json()["error"].lower()
     with sqlite3.connect(database) as connection:
         assert connection.execute("""SELECT COUNT(*) FROM ai_usage
             WHERE user_id=? AND feature='speaking_live' AND status='quota_rejected'""", (user_id,)).fetchone()[0] == 1
@@ -115,7 +115,7 @@ def test_live_network_failure_is_metered_as_failed_without_learning_event(tmp_pa
 
     with client.websocket_connect("/ws/speaking/live", headers={"Origin": "http://localhost:8000"}) as socket:
         socket.send_json({"token": token, "level": "A1", "topic": "Daily life"})
-        assert "Không kết nối được Gemini Live" in socket.receive_json()["error"]
+        assert "Không thể kết nối hội thoại trực tiếp" in socket.receive_json()["error"]
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT status FROM ai_usage WHERE feature='speaking_live'").fetchone()[0] == "failed"
         assert connection.execute("SELECT COUNT(*) FROM learning_events WHERE event_type='speaking_live'").fetchone()[0] == 0
@@ -126,4 +126,4 @@ def test_live_is_disabled_before_auth_or_provider_by_default(monkeypatch):
     with TestClient(application.app).websocket_connect(
         "/ws/speaking/live", headers={"Origin": "http://localhost:8000"}
     ) as socket:
-        assert "đang tắt" in socket.receive_json()["error"]
+        assert "hiện chưa khả dụng" in socket.receive_json()["error"]

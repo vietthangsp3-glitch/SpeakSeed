@@ -527,10 +527,10 @@ def placement_save_answer(data:PlacementResponseSave,user=Depends(current)):
  with connect() as c:
   attempt=c.execute("SELECT questions_json FROM placement_attempts WHERE id=? AND user_id=? AND status='started'",
                     (data.attempt_id,user['id'])).fetchone()
-  if not attempt:raise HTTPException(404,'Không tìm thấy bài placement đang làm')
+  if not attempt:raise HTTPException(404,'Không tìm thấy bài kiểm tra đang làm')
   questions={item['key']:item for item in json.loads(attempt['questions_json'])}
   question=questions.get(data.question_key)
-  if not question:raise HTTPException(404,'Câu hỏi không thuộc bài placement này')
+  if not question:raise HTTPException(404,'Câu hỏi không thuộc bài kiểm tra này')
   if data.state=='audio_unavailable' and question.get('section')!='listening':
    raise HTTPException(400,'Chỉ câu Listening mới có trạng thái lỗi audio')
   if data.state=='answered' and not data.answer.strip():raise HTTPException(400,'Câu trả lời không được để trống')
@@ -544,9 +544,9 @@ def placement_save_answer(data:PlacementResponseSave,user=Depends(current)):
 def placement_audio(attempt_id:int,question_key:str,user=Depends(current)):
  with connect() as c:
   attempt=c.execute('SELECT questions_json FROM placement_attempts WHERE id=? AND user_id=?',(attempt_id,user['id'])).fetchone()
-  if not attempt:raise HTTPException(404,'Không tìm thấy bài placement')
+  if not attempt:raise HTTPException(404,'Không tìm thấy bài kiểm tra')
   question=next((item for item in json.loads(attempt['questions_json']) if item['key']==question_key),None)
-  if not question or question.get('section')!='listening':raise HTTPException(404,'Không tìm thấy audio Listening')
+  if not question or question.get('section')!='listening':raise HTTPException(404,'Không tìm thấy bài nghe')
  return JSONResponse({'text':question['audio_text'],'language':'en-US'},headers={'Cache-Control':'private, no-store'})
 
 @app.post('/api/placement/submit')
@@ -554,8 +554,8 @@ def placement_submit(data:PlacementSubmission,user=Depends(current)):
  stamp=now()
  with connect() as c:
   attempt=c.execute('SELECT * FROM placement_attempts WHERE id=? AND user_id=?',(data.attempt_id,user['id'])).fetchone()
-  if not attempt:raise HTTPException(404,'Không tìm thấy lượt placement test')
-  if attempt['status']!='started':raise HTTPException(409,'Lượt placement test này đã hoàn thành')
+  if not attempt:raise HTTPException(404,'Không tìm thấy lượt kiểm tra')
+  if attempt['status']!='started':raise HTTPException(409,'Lượt kiểm tra này đã hoàn thành')
   questions=json.loads(attempt['questions_json'])
   for answer in data.answers:
    c.execute('''INSERT INTO placement_responses(attempt_id,user_id,question_key,answer,state,updated_at)
@@ -594,8 +594,8 @@ def placement_history(user=Depends(current)):
 def placement_review(attempt_id:int,user=Depends(current)):
  with connect() as c:
   row=c.execute('SELECT * FROM placement_attempts WHERE id=? AND user_id=?',(attempt_id,user['id'])).fetchone()
- if not row:raise HTTPException(404,'Không tìm thấy kết quả placement')
- if row['status']!='completed':raise HTTPException(409,'Bài placement chưa hoàn thành')
+ if not row:raise HTTPException(404,'Không tìm thấy kết quả kiểm tra')
+ if row['status']!='completed':raise HTTPException(409,'Bài kiểm tra chưa hoàn thành')
  return {'attempt_id':row['id'],'status':row['status'],'completed_at':row['completed_at'],
          'recommended_level':row['recommended_level'],**json.loads(row['score_json'] or '{}')}
 
@@ -799,7 +799,7 @@ def grammar_lesson(lesson_id:int):
 def grammar_unit_test(unit_id:int):
  with connect() as c:
   unit=c.execute('SELECT id,level,sequence,title,description_vi FROM grammar_units WHERE id=? AND published=1',(unit_id,)).fetchone()
-  if not unit:raise HTTPException(404,'Không tìm thấy unit')
+  if not unit:raise HTTPException(404,'Không tìm thấy chặng học')
   rows=c.execute('''SELECT id,lesson_id,unit_id,level,kind,sequence,prompt,options_json,explanation_vi,is_unit_test,review_status
    FROM grammar_exercises WHERE unit_id=? AND is_unit_test=1 AND published=1 ORDER BY sequence''',(unit_id,)).fetchall()
  return {'unit':dict(unit),'exercises':[grammar_exercise_public(x) for x in rows]}
@@ -960,7 +960,7 @@ def reading_save_word(data:ReadingSavedWord,user=Depends(current)):
 @app.post('/api/skills/speaking/start')
 def speaking_session_start(data:SpeakingStart,user=Depends(current)):
  if data.mode=='live' and not _gemini_live_enabled():
-  raise HTTPException(503,'Gemini Live đang tắt trong môi trường thử nghiệm này. Hãy dùng chế độ nói từng lượt.')
+  raise HTTPException(503,'Hội thoại trực tiếp hiện chưa khả dụng. Hãy dùng chế độ nói từng lượt.')
  stamp=now()
  with connect() as c:
   lesson=c.execute("SELECT id,title,level,content_en FROM skill_lessons WHERE id=? AND skill='speaking' AND published=1",(data.lesson_id,)).fetchone()
@@ -1020,7 +1020,7 @@ def speaking_session_evaluate(data:SpeakingEvaluation,request:Request,user=Depen
  except HTTPException as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise
  except urllib.error.HTTPError as exc:
-  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise HTTPException(502,f'Gemini trả về HTTP {exc.code}')
+  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise HTTPException(502,'Không thể tạo phản hồi lúc này. Vui lòng thử lại sau.')
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
   logging.exception('Speaking evaluation failed');raise HTTPException(502,'Không thể tạo phản hồi Speaking lúc này')
@@ -1083,7 +1083,7 @@ def writing_submit(data:WritingSubmission,request:Request,user=Depends(current))
  except HTTPException as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise
  except urllib.error.HTTPError as exc:
-  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise HTTPException(502,f'Gemini trả về HTTP {exc.code}')
+  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise HTTPException(502,'Không thể tạo phản hồi lúc này. Bản nháp của bạn vẫn được giữ.')
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
   logging.exception('Writing feedback failed');raise HTTPException(502,'Không thể tạo phản hồi Writing lúc này; bản nháp vẫn được giữ')
@@ -1096,7 +1096,7 @@ def throttle(user_id,action,limit=25,window=3600):
  now_ts=time.monotonic(); k=(user_id,action)
  with _rate_lock:
   a=[t for t in _rate.get(k,[]) if now_ts-t<window]
-  if len(a)>=limit: raise HTTPException(429,'Bạn đã dùng hết lượt AI trong khoảng thời gian này')
+  if len(a)>=limit: raise HTTPException(429,'Bạn đã sử dụng hết lượt của tính năng này. Vui lòng thử lại sau.')
   a.append(now_ts);_rate[k]=a
 
 def metered_start(request:Request,user_id:int|None,feature:str,model:str,input_units:int=0,**limit_options):
@@ -1119,14 +1119,14 @@ def gemini_projects()->list[GeminiProject]:
 def gemini_key():
  """Compatibility helper; provider routes use the managed pool below."""
  projects=gemini_projects()
- if not projects:raise HTTPException(503,'Chưa cấu hình Gemini API key trên server. Các bài không dùng AI vẫn học bình thường.')
+ if not projects:raise HTTPException(503,'Tính năng hỗ trợ bằng AI hiện chưa khả dụng. Các bài học khác vẫn hoạt động bình thường.')
  return projects[0].key
 
 _gemini_pool_lock=threading.Lock()
 
 def acquire_gemini_project(excluded:set[str]|None=None)->GeminiProject:
  projects=gemini_projects();excluded=excluded or set()
- if not projects:raise HTTPException(503,'Chưa cấu hình Gemini API key trên server. Các bài không dùng AI vẫn học bình thường.')
+ if not projects:raise HTTPException(503,'Tính năng hỗ trợ bằng AI hiện chưa khả dụng. Các bài học khác vẫn hoạt động bình thường.')
  current=now()
  with _gemini_pool_lock:
   with connect() as c:
@@ -1138,7 +1138,7 @@ def acquire_gemini_project(excluded:set[str]|None=None)->GeminiProject:
    eligible=[project for project in projects if project.project_id not in excluded and
     (not states[project.project_id]['cooldown_until'] or states[project.project_id]['cooldown_until']<=current)]
    if not eligible:
-    raise HTTPException(429,'Tất cả project Gemini đang cooldown hoặc hết quota. Các bài không dùng AI vẫn hoạt động bình thường.',headers={'Retry-After':'60'})
+    raise HTTPException(429,'Bạn đã sử dụng hết lượt của tính năng này. Vui lòng thử lại sau; các bài học khác vẫn hoạt động bình thường.',headers={'Retry-After':'60'})
    chosen=min(eligible,key=lambda project:(states[project.project_id]['selection_count']/project.weight,
     states[project.project_id]['last_selected_at'] or '',project.project_id))
    c.execute('''UPDATE gemini_project_state SET selection_count=selection_count+1,last_selected_at=?,
@@ -1175,7 +1175,7 @@ def gemini_pool_call(callback,usage_id:int|None=None):
    last_error=exc;record_gemini_project_result(project,False,exc)
    if attempt+1>=max_attempts or not retryable_provider_error(exc):raise
  if last_error:raise last_error
- raise HTTPException(503,'Không có project Gemini khả dụng')
+ raise HTTPException(503,'Tính năng hỗ trợ bằng AI hiện chưa khả dụng. Vui lòng thử lại sau.')
 
 def await_gemini_sync(system,contents,key):
  model=os.getenv('GEMINI_TEXT_MODEL','gemini-2.5-flash')
@@ -1297,13 +1297,13 @@ def speaking_turn(data:SpeakingTurn,request:Request,user=Depends(current)):
  except urllib.error.HTTPError as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
   logging.warning('Gemini turn error status=%s',exc.code)
-  raise HTTPException(502,f'Gemini trả về HTTP {exc.code}. Kiểm tra key, model và hạn mức.')
+  raise HTTPException(502,'Không thể tạo câu trả lời lúc này. Vui lòng thử lại sau.')
  except HTTPException as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
   logging.exception('Gemini turn error')
-  raise HTTPException(502,'Không kết nối được Gemini')
+  raise HTTPException(502,'Không thể tạo câu trả lời lúc này. Vui lòng thử lại sau.')
 
 # Legacy Gemini TTS cache is deliberately preserved, but generation and cache playback
 # are disabled. All non-Live speech is produced locally by the browser.
@@ -1311,7 +1311,7 @@ TTS_CACHE=Path(os.getenv('TTS_CACHE_DIR',str(ROOT/'audio_cache')))
 if os.getenv('VERCEL')!='1':TTS_CACHE.mkdir(parents=True,exist_ok=True)
 @app.post('/api/tts')
 def tts_disabled():
- raise HTTPException(410,'Gemini TTS đã bị vô hiệu hóa. Hãy dùng Web Speech API trên thiết bị.')
+ raise HTTPException(410,'Cách phát âm thanh này không còn khả dụng. Hãy dùng nút Nghe trong bài học.')
 
 @app.websocket('/ws/speaking/live')
 async def live_proxy(ws:WebSocket):
@@ -1321,7 +1321,7 @@ async def live_proxy(ws:WebSocket):
   await ws.close(code=1008);return
  await ws.accept()
  if not _gemini_live_enabled():
-  await ws.send_json({'error':'Gemini Live đang tắt trong môi trường thử nghiệm này.'})
+  await ws.send_json({'error':'Hội thoại trực tiếp hiện chưa khả dụng.'})
   await ws.close(code=1008);return
  upstream=None;live_session=None;live_transcript=[];user=None;live_project=None;live_project_recorded=False
  usage_id=None;usage_started=time.perf_counter();usage_error='';activity_recorded=False;audio_received=False
@@ -1332,11 +1332,11 @@ async def live_proxy(ws:WebSocket):
   with connect() as c:
    user=c.execute('SELECT user_id,csrf_hash FROM sessions WHERE token_hash=? AND expires>?',(hashlib.sha256(token.encode()).hexdigest(),now())).fetchone()
   if not user:
-   await ws.send_json({'error':'Đăng nhập trước khi sử dụng Live'});await ws.close(code=1008);return
+   await ws.send_json({'error':'Hãy đăng nhập trước khi bắt đầu hội thoại trực tiếp.'});await ws.close(code=1008);return
   if ws.cookies.get('ss_session'):
    csrf=str(first.get('csrf',''))
    if not csrf or not secrets.compare_digest(hashlib.sha256(csrf.encode()).hexdigest(),user['csrf_hash']):
-    await ws.send_json({'error':'CSRF token không hợp lệ'});await ws.close(code=1008);return
+    await ws.send_json({'error':'Phiên đăng nhập không còn hợp lệ. Vui lòng tải lại trang.'});await ws.close(code=1008);return
   level=str(first.get('level','A1'))[:10];topic=str(first.get('topic','daily life'))[:80]
   live_session_id=first.get('session_id')
   if live_session_id is not None:
@@ -1344,7 +1344,7 @@ async def live_proxy(ws:WebSocket):
     FROM speaking_sessions s JOIN skill_lessons l ON l.id=s.lesson_id
     WHERE s.id=? AND s.user_id=?''',(live_session_id,user['user_id'])).fetchone()
    if not live_session or live_session['status']!='started' or live_session['mode']!='live':
-    await ws.send_json({'error':'Phiên Gemini Live không hợp lệ'});await ws.close(code=1008);return
+    await ws.send_json({'error':'Phiên hội thoại không hợp lệ. Vui lòng bắt đầu lại.'});await ws.close(code=1008);return
    level=live_session['level'];topic=live_session['title']
   model=os.getenv('GEMINI_LIVE_MODEL','gemini-3.1-flash-live-preview')
   with connect() as c:
@@ -1409,7 +1409,8 @@ async def live_proxy(ws:WebSocket):
   logging.warning('Live session closed: %s',type(exc).__name__)
   if live_project and not live_project_recorded:record_gemini_project_result(live_project,False,exc)
   usage_error=safe_error_code(exc)
-  try:await ws.send_json({'error':'Không kết nối được Gemini Live. Kiểm tra API key, model và quota.'})
+  message = exc.detail if isinstance(exc, HTTPException) and isinstance(exc.detail, str) else 'Không thể kết nối hội thoại trực tiếp. Vui lòng thử lại sau.'
+  try:await ws.send_json({'error':message})
   except Exception:pass
  finally:
   if upstream:await upstream.close()
@@ -1443,7 +1444,7 @@ def chat(data:Chat,request:Request,user=Depends(current)):
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
-  raise HTTPException(502,'Gemini không phản hồi. Kiểm tra model, API key và quota trên server.')
+  raise HTTPException(502,'Gia sư hiện chưa thể trả lời. Vui lòng thử lại sau.')
 
 PRONUNCIATION_MIME_TYPES={
  'audio/webm':'webm','audio/ogg':'ogg','audio/wav':'wav','audio/x-wav':'wav','audio/mp4':'mp4','audio/mpeg':'mpeg'
@@ -1469,7 +1470,7 @@ def validate_browser_audio(encoded:str,mime_type:str)->tuple[bytes,str]:
 @app.post('/api/pronunciation/ai')
 def pronunciation_ai(data:GeminiPronunciation,request:Request,user=Depends(current)):
  if not _gemini_pronunciation_enabled():
-  raise HTTPException(503,'Gemini chấm phát âm chưa được quản trị viên bật. Basic Practice vẫn dùng được mà không cần AI.')
+  raise HTTPException(503,'Phản hồi phát âm nâng cao hiện chưa khả dụng. Bạn vẫn có thể dùng Luyện nói cơ bản.')
  word=get_learning_word(data.word_id)
  if not word:raise HTTPException(404,'Không tìm thấy từ')
  target=(word.get('example') or '').strip() if data.target_kind=='sentence' else word['word'].strip()
@@ -1497,20 +1498,20 @@ def pronunciation_ai(data:GeminiPronunciation,request:Request,user=Depends(curre
   return result
  except urllib.error.HTTPError as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
-  if exc.code==429:raise HTTPException(429,'Gemini đã hết quota. Basic Practice và các bài học không dùng AI vẫn hoạt động bình thường.',headers={'Retry-After':'86400'})
-  raise HTTPException(502,f'Gemini không thể phân tích audio lúc này (HTTP {exc.code}).')
+  if exc.code==429:raise HTTPException(429,'Bạn đã sử dụng hết lượt phản hồi phát âm hôm nay. Luyện nói cơ bản và các bài học khác vẫn hoạt động.',headers={'Retry-After':'86400'})
+  raise HTTPException(502,'Không thể phân tích bản ghi lúc này. Vui lòng thử lại sau.')
  except HTTPException as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
-  raise HTTPException(502,'Gemini trả về phản hồi không hợp lệ hoặc không nghe rõ. Hãy ghi âm lại; hệ thống không tự động gửi lại.')
+  raise HTTPException(502,'Bản ghi chưa đủ rõ để nhận xét. Hãy ghi âm lại; SpeakSeed sẽ không tự động gửi lại.')
 
 @app.post('/api/pronunciation')
 def pronunciation(data:Pronounce,request:Request,user=Depends(current)):
  word=get_learning_word(data.word_id)
  if not word:raise HTTPException(404,'Không tìm thấy từ')
  key=os.getenv('AZURE_SPEECH_KEY','');region=os.getenv('AZURE_SPEECH_REGION','')
- if not key or not region:raise HTTPException(503,'Advanced Pronunciation Assessment chưa được cấu hình. Basic Practice vẫn dùng miễn phí trên trình duyệt.')
+ if not key or not region:raise HTTPException(503,'Đánh giá phát âm chi tiết hiện chưa khả dụng. Bạn vẫn có thể dùng Luyện nói cơ bản.')
  try:audio=base64.b64decode(data.wav_base64,validate=True)
  except Exception:raise HTTPException(400,'Âm thanh không hợp lệ')
  if len(audio)>2_000_000 or not audio.startswith(b'RIFF'):raise HTTPException(400,'Yêu cầu âm thanh WAV dưới 2MB')
@@ -1525,7 +1526,7 @@ def pronunciation(data:Pronounce,request:Request,user=Depends(current)):
   metered_finish(usage_id,usage_started,True)
   return {'score':p.get('PronScore'),'accuracy':p.get('AccuracyScore'),'fluency':p.get('FluencyScore'),'completeness':p.get('CompletenessScore'),'recognized':best.get('Display',''),'words':[{'word':x.get('Word'),'score':(x.get('PronunciationAssessment') or {}).get('AccuracyScore'),'phonemes':[{'phoneme':ph.get('Phoneme'),'score':(ph.get('PronunciationAssessment') or {}).get('AccuracyScore')} for ph in x.get('Phonemes',[])]} for x in best.get('Words',[])]}
  except urllib.error.HTTPError as e:
-  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(e));raise HTTPException(502,f'Azure Speech trả về lỗi {e.code}')
+  metered_finish(usage_id,usage_started,False,error_code=safe_error_code(e));raise HTTPException(502,'Không thể đánh giá phát âm lúc này. Vui lòng thử lại sau.')
  except Exception as exc:
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc));raise HTTPException(502,'Không thể chấm phát âm lúc này')
 
@@ -1560,7 +1561,7 @@ def library_sentences(level:str='A1.1'):
 
 @app.get('/api/library/exercises')
 def library_exercises(level:str='A1.1',mode:str='grammar'):
- if mode not in ('grammar','rewrite','dictation'):raise HTTPException(400,'Invalid mode')
+ if mode not in ('grammar','rewrite','dictation'):raise HTTPException(400,'Dạng bài không hợp lệ')
  with library_db() as c:return [dict(r) for r in c.execute('SELECT id,mode,level,prompt,explanation FROM library_exercises WHERE level=? AND mode=? AND reviewed=1 ORDER BY id LIMIT 200',(level,mode))]
 
 class LibraryAnswer(BaseModel):
@@ -1571,7 +1572,7 @@ class LibraryAnswer(BaseModel):
 def library_check(data:LibraryAnswer,user=Depends(current)):
  with library_db() as c:
   row=c.execute('SELECT id,mode,answer,explanation FROM library_exercises WHERE id=? AND reviewed=1',(data.exercise_id,)).fetchone()
-  if not row:raise HTTPException(404,'Exercise not found')
+  if not row:raise HTTPException(404,'Không tìm thấy bài tập')
   correct=normalize_answer(data.answer)==normalize_answer(row['answer'])
   c.execute("""INSERT INTO library_results(user_id,exercise_id,correct,wrong,updated) VALUES(?,?,?,?,?) ON CONFLICT(user_id,exercise_id) DO UPDATE SET correct=correct+excluded.correct,wrong=wrong+excluded.wrong,updated=excluded.updated""",(user['id'],data.exercise_id,int(correct),int(not correct),now()))
   stamp=now();event_type='listening_answer' if row['mode']=='dictation' else 'exercise_answer'
