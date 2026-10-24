@@ -20,8 +20,18 @@ Date: 2026-10-24
 
 ## Production status
 
-- `https://speak-seed.vercel.app/api/health/ready`: ready, PostgreSQL connected, **4,213** published words, 8 recorded migrations.
-- Production has not been modified. It must receive migrations 009–021 before the non-destructive content sync.
+- Neon production was backed up and verified before mutation: 35 tables, 20,833 rows,
+  archive SHA-256 `f0ec1c1ce1a8d5278f196fbd1b2232848068681399b61c197f825e14725a367c`.
+- Migrations 009–021 and the content sync completed successfully. Neon now has 64
+  tables, schema 021, **6,280** unique published words, 15,635 attributions, 24
+  topics and 1,513 published topic mappings.
+- Preservation checks passed: 1 user, 1 session and 2 placement attempts remained
+  unchanged; 100 lessons and 1,000 exercises remain published; no SRS orphan or
+  unvalidated foreign-key constraint was found.
+- Before the new application commit was pushed, the live website already returned
+  6,280 words from Neon but correctly reported degraded health because the old
+  deployed code only recognized the previous schema count. The post-deploy result
+  is recorded in the final task report.
 - Sync tooling is dry-run by default, requires exact host/database confirmation for writes, exports a content-only rollback snapshot, refuses ID collisions, does not update existing words, and never reads or writes account/progress/SRS tables.
 
 ## Authorized production sequence
@@ -38,4 +48,4 @@ python tools/sync_published_vocabulary_to_postgres.py --apply --confirm-host "<e
 python tools/verify_postgres_migration.py --target-url $env:DATABASE_URL --source speakseed.db
 ```
 
-Only after all verification succeeds should the tested commit be pushed, because this repository's Vercel integration may redeploy automatically. No Gemini API is used by any step above.
+No Gemini API was used by any migration, backup, verification or deployment step.
