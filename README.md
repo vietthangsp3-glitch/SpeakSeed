@@ -1,5 +1,8 @@
 # SpeakSeed
 
+> `A0` in SpeakSeed is an internal pre-A1 onboarding label. It is not an
+> official CEFR level; the published vocabulary catalog itself starts at A1.
+
 SpeakSeed là website học tiếng Anh cho người Việt, chạy bằng FastAPI và SQLite. Bản hiện tại có ngân hàng từ vựng thực, lộ trình ngữ pháp A0–B2, chương trình Listening/Reading/Speaking/Writing, placement test, learning path cá nhân, dashboard, daily plan, flashcard, dịch hai chiều, tài khoản và tiến độ học riêng.
 
 Đợt thử nội bộ A0–A1 dùng [checklist 30 phút](BEGINNER_BETA_30_MIN_CHECKLIST.md), [hướng dẫn mạng nội bộ](INTERNAL_BETA_GUIDE.md) và [biểu mẫu phản hồi](BETA_FEEDBACK_TEMPLATE.md). Daily plan A0–A1 ưu tiên từ vựng, ôn tập, grammar, Listening và Reading; AI Speaking/Writing là tùy chọn.

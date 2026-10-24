@@ -13,8 +13,8 @@ import sqlite3
 from pathlib import Path
 
 
-MINIMUM_SCHEMA_VERSION = "021_automated_topic_classification.sql"
-REQUIRED_TABLE_COUNT = 64
+MINIMUM_SCHEMA_VERSION = "022_wordnet_topic_classification.sql"
+REQUIRED_TABLE_COUNT = 65
 REQUIRED_PUBLISHED_CONTENT = {
     "published_words": 6280,
     "published_grammar_lessons": 100,

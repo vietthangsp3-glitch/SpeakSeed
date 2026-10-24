@@ -342,11 +342,15 @@ def usage_summary(user=Depends(current)):
   'cost_note':'Chi phí chỉ là ước tính theo đơn giá cấu hình trên server; giá trị 0 nghĩa là chưa cấu hình đơn giá, không có nghĩa dịch vụ miễn phí.'}
 
 @app.get('/api/words')
-def words():
+def words(level:str|None=None,topic:str|None=None):
+ if level is not None and level not in ('A0','A1','A2','B1','B2'):raise HTTPException(400,'Cấp độ không hợp lệ')
  with library_db() as c:
-  rows=[dict(r) for r in c.execute("SELECT id,word,meaning,ipa,pos,example,example_vi,topic,emoji,stage FROM library_words WHERE reviewed=1 ORDER BY CASE stage WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 WHEN 'A2' THEN 2 WHEN 'B1' THEN 3 WHEN 'B2' THEN 4 END,word")]
+  params=[];where=['w.reviewed=1']
+  if level is not None:where.append('w.stage=?');params.append('A1' if level=='A0' else level)
+  if topic is not None:where.append('EXISTS(SELECT 1 FROM vocabulary_topic_words tw JOIN vocabulary_topics t ON t.id=tw.topic_id WHERE tw.word_id=w.id AND tw.published=1 AND t.active=1 AND t.slug=?)');params.append(topic)
+  rows=[dict(r) for r in c.execute("SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage FROM library_words w WHERE "+' AND '.join(where)+" ORDER BY CASE w.stage WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 WHEN 'A2' THEN 2 WHEN 'B1' THEN 3 WHEN 'B2' THEN 4 END,w.word",params)]
   _attach_word_topics(c,rows)
- return rows if rows else [dict(w,stage=['A0','A1.1','A1.2','A2.1','A2.2','B1'][min(5,i//6)]) for i,w in enumerate(WORD_DICT.values())]
+ return rows if rows or level is not None or topic is not None else [dict(w,stage=['A0','A1.1','A1.2','A2.1','A2.2','B1'][min(5,i//6)]) for i,w in enumerate(WORD_DICT.values())]
 
 def _attach_word_topics(c,rows):
  ids={row['id'] for row in rows}

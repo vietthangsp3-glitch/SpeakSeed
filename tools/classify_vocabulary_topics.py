@@ -30,7 +30,7 @@ EXACT: dict[str, set[str]] = {
     "family-relationships": {"bride", "bridegroom", "grandchild", "granddaughter", "grandparent", "grandson", "nephew", "niece", "stepfather", "stepmother", "widow", "widower"},
     "food-drinks": {"aubergine", "bacon", "barbecue", "barley", "biscuit", "broccoli", "bun", "cabbage", "cauliflower", "cereal", "cheesecake", "cucumber", "dessert", "garlic", "hamburger", "lemonade", "mushroom", "omelette", "pancake", "pineapple", "sausage", "spaghetti", "spinach", "strawberry", "watermelon"},
     "home-furniture": {"balcony", "bedside", "blanket", "bookcase", "bucket", "carpet", "cupboard", "curtain", "doorbell", "furniture", "mattress", "pillow", "sofa", "staircase", "wardrobe"},
-    "education": {"blackboard", "classmate", "coursebook", "dictionary", "headmaster", "homework", "schoolchild", "schoolteacher", "textbook", "undergraduate"},
+    "education": {"blackboard", "classmate", "coursebook", "dictionary", "extension", "headmaster", "homework", "schoolchild", "schoolteacher", "textbook", "undergraduate"},
     "work-careers": {"accountant", "applicant", "architect", "baker", "barber", "builder", "businessman", "businesswoman", "carpenter", "cashier", "dentist", "electrician", "engineer", "farmer", "firefighter", "journalist", "librarian", "mechanic", "nurse", "photographer", "plumber", "receptionist", "scientist", "secretary", "waiter", "waitress"},
     "travel-tourism": {"backpacker", "campsite", "guidebook", "hostel", "sightseeing", "suitcase", "tourist", "traveller"},
     "transportation": {"aircrew", "airline", "airplane", "biker", "crossroads", "helicopter", "motorbike", "motorcycle", "railway", "taxi", "tram"},

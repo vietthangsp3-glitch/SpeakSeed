@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TABLES = (
     "data_sources", "library_words", "word_attributions", "vocabulary_topics",
     "vocabulary_automated_releases", "vocabulary_automated_topic_releases",
-    "vocabulary_topic_words",
+    "vocabulary_topic_corrections", "vocabulary_topic_words",
 )
 
 
@@ -74,8 +74,8 @@ def sync(source_path: Path, target_url: str, apply: bool, confirm_host: str = ""
                 raise RuntimeError("Target is not an initialized SpeakSeed database")
             cursor.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
             schema = cursor.fetchone()[0]
-            if schema < "021_automated_topic_classification.sql":
-                raise RuntimeError(f"Apply PostgreSQL migrations through 021 first; target is {schema}")
+            if schema < "022_wordnet_topic_classification.sql":
+                raise RuntimeError(f"Apply PostgreSQL migrations through 022 first; target is {schema}")
             cursor.execute("SELECT id,normalized_word FROM library_words WHERE reviewed=1")
             target_words = {row[1]: row[0] for row in cursor.fetchall()}
             local_words = _rows(source, "library_words")
@@ -107,15 +107,43 @@ def sync(source_path: Path, target_url: str, apply: bool, confirm_host: str = ""
                 target_words[row["normalized_word"]] = row["id"]
             # These rows are either immutable evidence or static catalog data.
             # ON CONFLICT DO NOTHING makes retries safe without changing users.
-            for table in ("data_sources", "vocabulary_topics", "vocabulary_automated_releases",
-                          "vocabulary_automated_topic_releases", "word_attributions", "vocabulary_topic_words"):
+            sync_tables = ["data_sources", "vocabulary_topics", "vocabulary_automated_topic_releases",
+                           "vocabulary_topic_corrections", "vocabulary_topic_words"]
+            # Attribution and word-release rows are immutable and already
+            # present when this is a taxonomy-only sync. Avoid thousands of
+            # needless serverless round-trips; include them only for new words.
+            if missing:
+                sync_tables[2:2] = ["vocabulary_automated_releases", "word_attributions"]
+            unique_columns = {
+                "data_sources": ("name",), "vocabulary_topics": ("slug",),
+                "vocabulary_automated_releases": ("word_id", "rule_version"),
+                "vocabulary_automated_topic_releases": ("word_id", "topic_id", "rule_version"),
+                "vocabulary_topic_corrections": ("word_id", "old_topic_id", "new_topic_id", "rule_version"),
+                "word_attributions": ("word_id", "field_name", "source_name", "source_record_id"),
+                "vocabulary_topic_words": ("word_id", "topic_id", "sense_key"),
+            }
+            for table in sync_tables:
+                key_cols = unique_columns[table]
+                cursor.execute(f'SELECT ' + ','.join(f'"{c}"' for c in key_cols) + f' FROM "{table}"')
+                existing_keys = {tuple(row) for row in cursor.fetchall()}
                 for row in _rows(source, table):
                     if "word_id" in row and row["word_id"] not in local_by_id:
+                        continue
+                    if tuple(row[col] for col in key_cols) in existing_keys:
                         continue
                     cols = list(row)
                     cursor.execute(f'INSERT INTO "{table}" (' + ','.join(f'"{c}"' for c in cols) +
                                    ') VALUES (' + ','.join(['%s'] * len(cols)) + ') ON CONFLICT DO NOTHING',
                                    [row[c] for c in cols])
+            # Synchronize only explicitly evidenced automated withdrawals of
+            # legacy topic labels. No user-owned table is updated.
+            for row in _rows(source, "vocabulary_topic_corrections"):
+                cursor.execute("""UPDATE vocabulary_topic_words SET published=0,review_status='rejected',rationale=%s
+                  WHERE word_id=%s AND topic_id=%s AND source_key='library_words.topic' AND published=1""",
+                  (row["rationale"], row["word_id"], row["old_topic_id"]))
+                cursor.execute("""UPDATE library_words SET topic=(SELECT name_en FROM vocabulary_topics WHERE id=%s)
+                  WHERE id=%s AND topic=(SELECT name_en FROM vocabulary_topics WHERE id=%s)""",
+                  (row["new_topic_id"], row["word_id"], row["old_topic_id"]))
             cursor.execute("SELECT setval(pg_get_serial_sequence('library_words','id'),(SELECT MAX(id) FROM library_words))")
             cursor.execute("SELECT COUNT(*),COUNT(DISTINCT normalized_word) FROM library_words WHERE reviewed=1")
             total, unique = cursor.fetchone()
