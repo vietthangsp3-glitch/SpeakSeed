@@ -33,7 +33,7 @@ def run(base_url: str, output: Path) -> dict:
         page.on("request", lambda request: tts_requests.append(request.url) if "/api/tts" in request.url else None)
         page.on("websocket", lambda socket: websocket_urls.append(socket.url))
         page.goto(base_url, wait_until="networkidle")
-        native = page.evaluate("()=>({synthesis:typeof speechSynthesis!=='undefined',utterance:typeof SpeechSynthesisUtterance==='function',voices:speechSynthesis?.getVoices?.().filter(v=>/^en[-_]/i.test(v.lang)).length||0})")
+        native = page.evaluate("()=>({synthesis:typeof speechSynthesis!=='undefined',utterance:typeof SpeechSynthesisUtterance==='function',voices:speechSynthesis?.getVoices?.().filter(v=>/^en[-_]/i.test(v.lang)).length||0,recognition:typeof SpeechRecognition==='function'||typeof webkitSpeechRecognition==='function'})")
         assert native["synthesis"] and native["utterance"]
         assert page.evaluate("window.__speechCalls.length") == 0
         results.append({"name": "native_web_speech_available", "status": "PASS", "detail": native})
@@ -83,7 +83,8 @@ def run(base_url: str, output: Path) -> dict:
         page.once("dialog", lambda dialog: dialog.dismiss())
         page.locator("#startSpeaking").click()
         assert not websocket_urls
-        assert "Chưa kết nối" in page.locator("#speakStatus").inner_text()
+        assert any(message in page.locator("#speakStatus").inner_text()
+                   for message in ("Chưa kết nối", "đang tắt"))
         results.append({"name": "live_requires_explicit_confirm_and_no_auto_connect", "status": "PASS"})
 
         page.set_viewport_size({"width": 390, "height": 844}); page.reload(wait_until="networkidle")
@@ -114,7 +115,114 @@ def run(base_url: str, output: Path) -> dict:
         assert "không hỗ trợ Web Speech API" in unsupported_page.locator("#toast").inner_text()
         assert not unsupported_tts
         results.append({"name": "unsupported_web_speech_never_falls_back_to_gemini", "status": "PASS"})
-        unsupported.close(); browser.close()
+        unsupported.close()
+
+        recognition = browser.new_context(viewport={"width": 390, "height": 844})
+        recognition.add_init_script(SPEECH_SPY + """
+            navigator.mediaDevices.getUserMedia=async()=>({getTracks:()=>[{stop(){}}]});
+            class MockRecognition {
+              start(){this.onstart?.();setTimeout(()=>{this.onresult?.({results:[[{transcript:'A.'}]]});this.onend?.()},10)}
+              stop(){this.onend?.()}
+            }
+            Object.defineProperty(window,'SpeechRecognition',{value:MockRecognition,configurable:true});
+            Object.defineProperty(window,'webkitSpeechRecognition',{value:MockRecognition,configurable:true});
+        """)
+        recognition_page = recognition.new_page(); provider_requests: list[str] = []
+        recognition_page.on("request", lambda request: provider_requests.append(request.url) if any(
+            marker in request.url for marker in ("/api/pronunciation", "/api/chat", "/api/speaking/")
+        ) else None)
+        recognition_page.goto(base_url, wait_until="networkidle")
+        recognition_page.locator('[data-view="speak"]').click()
+        assert recognition_page.get_by_text("MIỄN PHÍ · BASIC PRACTICE", exact=True).is_visible()
+        assert recognition_page.locator("#advancedMic").is_disabled()
+        recognition_page.locator("#basicMic").click()
+        recognition_page.get_by_text("Mức khớp nội dung nhận diện:", exact=False).wait_for()
+        result_text = recognition_page.locator("#basicResult").inner_text()
+        assert "100%" in result_text and "không phải điểm phát âm" in result_text
+        assert recognition_page.evaluate("speechMatch(\"I'm ready!\",'I am ready')") == 1
+        assert not provider_requests
+        results.append({"name": "basic_recognition_case_punctuation_no_provider_api", "status": "PASS"})
+        recognition.close()
+
+        denied = browser.new_context(viewport={"width": 390, "height": 844})
+        denied.add_init_script("""
+            class MockRecognition {start(){this.onstart?.()} stop(){this.onend?.()}}
+            Object.defineProperty(window,'SpeechRecognition',{value:MockRecognition,configurable:true});
+            Object.defineProperty(window,'webkitSpeechRecognition',{value:MockRecognition,configurable:true});
+            navigator.mediaDevices.getUserMedia=async()=>{const error=new Error('denied');error.name='NotAllowedError';throw error};
+        """)
+        denied_page = denied.new_page(); denied_page.goto(base_url, wait_until="networkidle")
+        denied_page.locator('[data-view="speak"]').click(); denied_page.locator("#basicMic").click()
+        assert "từ chối quyền microphone" in denied_page.locator("#basicStatus").inner_text()
+        results.append({"name": "basic_recognition_permission_denied_message", "status": "PASS"})
+        denied.close()
+
+        no_recognition = browser.new_context(viewport={"width": 390, "height": 844})
+        no_recognition.add_init_script("""
+            Object.defineProperty(window,'SpeechRecognition',{value:undefined,configurable:true});
+            Object.defineProperty(window,'webkitSpeechRecognition',{value:undefined,configurable:true});
+        """)
+        no_recognition_page = no_recognition.new_page(); no_recognition_page.goto(base_url, wait_until="networkidle")
+        no_recognition_page.locator('[data-view="speak"]').click()
+        assert no_recognition_page.locator("#basicMic").is_disabled()
+        assert "không hỗ trợ Web Speech Recognition" in no_recognition_page.locator("#basicStatus").inner_text()
+        results.append({"name": "unsupported_recognition_has_honest_fallback", "status": "PASS"})
+        no_recognition.close()
+
+        gemini = browser.new_context(viewport={"width": 390, "height": 844})
+        gemini.add_init_script(SPEECH_SPY + """
+            navigator.mediaDevices.getUserMedia=async()=>({getTracks:()=>[{stop(){}}]});
+            class MockMediaRecorder {
+              static isTypeSupported(){return true}
+              constructor(stream,options){this.state='inactive';this.mimeType=options.mimeType}
+              start(){this.state='recording'}
+              stop(){
+                this.state='inactive';
+                const bytes=new Uint8Array([0x1a,0x45,0xdf,0xa3,...new Array(256).fill(0)]);
+                this.ondataavailable?.({data:new Blob([bytes],{type:this.mimeType})});
+                this.onstop?.();
+              }
+            }
+            Object.defineProperty(window,'MediaRecorder',{value:MockMediaRecorder,configurable:true});
+        """)
+        gemini_page = gemini.new_page(); assessment_requests: list[str] = []
+        gemini_page.route("**/api/runtime-config", lambda route: route.fulfill(json={
+            "gemini_live_enabled": False, "gemini_text_enabled": False,
+            "gemini_pronunciation_enabled": True, "gemini_pronunciation_daily_limit": 5,
+            "browser_speech_only": True, "azure_pronunciation_enabled": False,
+        }))
+
+        def mock_assessment(route):
+            assessment_requests.append(route.request.url)
+            route.fulfill(json={"target": "a", "model": "gemini-2.5-flash", "cached": False, "feedback": {
+                "target_result": "clear_match", "overall_vi": "Bản ghi nghe rõ.",
+                "clear_parts": ["Từ mẫu"], "improve_parts": [],
+                "correction_steps_vi": ["Nghe và đọc lại."], "retry_vi": "Thử lại khi sẵn sàng.",
+                "needs_retry": False, "disclaimer_vi": "Không phải điểm thi.",
+            }})
+
+        gemini_page.route("**/api/pronunciation/ai", mock_assessment)
+        gemini_page.goto(base_url, wait_until="networkidle")
+        gemini_page.locator("#authBtn").click(); gemini_page.locator("#switchAuth").click()
+        marker = secrets.token_hex(5)
+        gemini_page.locator("#name").fill("Gemini Speech QA")
+        gemini_page.locator("#email").fill(f"gemini-speech-{marker}@example.invalid")
+        gemini_page.locator("#password").fill("speech-test-password")
+        gemini_page.locator("#authSubmit").click()
+        gemini_page.get_by_role("button", name="Đăng xuất", exact=True).wait_for(timeout=15000)
+        gemini_page.locator('[data-view="speak"]').click()
+        assert gemini_page.get_by_text("GEMINI AI · ĐÃ BẬT", exact=True).is_visible()
+        assert not assessment_requests
+        gemini_page.locator("#geminiRecord").click(); gemini_page.wait_for_timeout(400)
+        gemini_page.locator("#geminiStop").click()
+        gemini_page.get_by_text("Hãy nghe lại trước khi chấm", exact=False).wait_for()
+        assert gemini_page.locator("#geminiAssess").is_enabled() and not assessment_requests
+        gemini_page.locator("#geminiAssess").click()
+        gemini_page.get_by_text("Bản ghi nghe rõ.", exact=True).wait_for()
+        assert len(assessment_requests) == 1
+        assert "Không phải điểm thi." in gemini_page.locator("#geminiResult").inner_text()
+        results.append({"name": "gemini_audio_only_sent_after_explicit_assess", "status": "PASS"})
+        gemini.close(); browser.close()
 
     report = {"ok": all(item["status"] == "PASS" for item in results), "base_url": base_url,
               "results": results, "gemini_tts_requests_from_ui": 0}

@@ -128,31 +128,54 @@ AI_LIMITS = {
 
 
 def start_ai_usage(con, *, user_id: int | None, ip: str, feature: str, model: str,
-                   input_units: int = 0) -> int:
-    account_limit, ip_limit = AI_LIMITS[feature]
-    since = stamp(utcnow() - timedelta(hours=1)); ip_digest = privacy_hash(ip)
+                   input_units: int = 0, account_limit: int | None = None,
+                   ip_limit: int | None = None, window_seconds: int = 3600,
+                   model_scope: str = "", request_fingerprint: str = "") -> int:
+    """Reserve one metered provider call before it is made.
+
+    The optional limits support deliberately scarce features (for example audio
+    assessment) without changing the existing hourly limits.  ``model_scope``
+    keeps an optional Azure assessment from consuming the Gemini-only quota.
+    """
+    default_account, default_ip = AI_LIMITS[feature]
+    account_limit = default_account if account_limit is None else max(1, account_limit)
+    ip_limit = default_ip if ip_limit is None else max(1, ip_limit)
+    window_seconds = max(60, min(window_seconds, 604800))
+    since = stamp(utcnow() - timedelta(seconds=window_seconds)); ip_digest = privacy_hash(ip)
+    model_clause = " AND model=?" if model_scope else ""
     if user_id is not None:
-        count = con.execute("""SELECT COUNT(*) total FROM ai_usage WHERE user_id=? AND feature=?
-            AND created_at>=? AND status<>'quota_rejected'""", (user_id, feature, since)).fetchone()["total"]
+        params = (user_id, feature, since, model_scope) if model_scope else (user_id, feature, since)
+        count = con.execute(f"""SELECT COUNT(*) total FROM ai_usage WHERE user_id=? AND feature=?
+            AND created_at>=? AND status<>'quota_rejected'{model_clause}""", params).fetchone()["total"]
         if count >= account_limit:
             con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,error_code,created_at,finished_at)
                 VALUES(?,?,?,'quota_rejected',?,?, 'account_limit',?,?)""",
                 (user_id, ip_digest, feature, model, input_units, stamp(), stamp()))
-            raise HTTPException(429, "Bạn đã dùng hết lượt AI của tính năng này trong giờ. Từ vựng, ngữ pháp, nghe và đọc vẫn dùng bình thường; hãy thử AI lại sau.", headers={"Retry-After": "3600"})
-    count = con.execute("""SELECT COUNT(*) total FROM ai_usage WHERE ip_hash=? AND feature=?
-        AND created_at>=? AND status<>'quota_rejected'""", (ip_digest, feature, since)).fetchone()["total"]
+            raise HTTPException(429, "Bạn đã dùng hết lượt AI của tính năng này trong khoảng thời gian hiện tại. Từ vựng, ngữ pháp, nghe và đọc vẫn dùng bình thường; hãy thử AI lại sau.", headers={"Retry-After": str(window_seconds)})
+    params = (ip_digest, feature, since, model_scope) if model_scope else (ip_digest, feature, since)
+    count = con.execute(f"""SELECT COUNT(*) total FROM ai_usage WHERE ip_hash=? AND feature=?
+        AND created_at>=? AND status<>'quota_rejected'{model_clause}""", params).fetchone()["total"]
     if count >= ip_limit:
         con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,error_code,created_at,finished_at)
             VALUES(?,?,?,'quota_rejected',?,?, 'ip_limit',?,?)""",
             (user_id, ip_digest, feature, model, input_units, stamp(), stamp()))
-        raise HTTPException(429, "Thiết bị đã dùng hết lượt AI của tính năng này trong giờ. Các bài học không dùng AI vẫn hoạt động bình thường; hãy thử AI lại sau.", headers={"Retry-After": "3600"})
-    cursor = con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,created_at)
-        VALUES(?,?,?,'started',?,?,?)""", (user_id, ip_digest, feature, model, input_units, stamp()))
+        raise HTTPException(429, "Thiết bị đã dùng hết lượt AI của tính năng này trong khoảng thời gian hiện tại. Các bài học không dùng AI vẫn hoạt động bình thường; hãy thử AI lại sau.", headers={"Retry-After": str(window_seconds)})
+    if request_fingerprint:
+        cursor = con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,created_at,request_fingerprint)
+            VALUES(?,?,?,'started',?,?,?,?) ON CONFLICT DO NOTHING""",
+            (user_id, ip_digest, feature, model, input_units, stamp(), request_fingerprint))
+        if cursor.rowcount == 0 or cursor.lastrowid is None:
+            raise HTTPException(409, "Bản ghi âm này đã được gửi hoặc đang được xử lý. Không gửi lại để tránh tốn quota.")
+    else:
+        # Keep all existing AI features operational during the safe rollout
+        # window before migration 023 is explicitly applied to PostgreSQL.
+        cursor = con.execute("""INSERT INTO ai_usage(user_id,ip_hash,feature,status,model,input_units,created_at)
+            VALUES(?,?,?,'started',?,?,?)""", (user_id, ip_digest, feature, model, input_units, stamp()))
     return cursor.lastrowid
 
 
 def finish_ai_usage(con, usage_id: int, *, succeeded: bool, output_units: int = 0,
-                    latency_ms: int = 0, error_code: str = "") -> None:
+                    latency_ms: int = 0, error_code: str = "", result_json: str = "") -> None:
     row = con.execute("SELECT feature,input_units FROM ai_usage WHERE id=?", (usage_id,)).fetchone()
     if not row:
         return
@@ -162,10 +185,16 @@ def finish_ai_usage(con, usage_id: int, *, succeeded: bool, output_units: int = 
         input_rate = float(os.getenv("GEMINI_TTS_USD_PER_MILLION_CHARS", "0") or 0)
         output_rate = 0
     estimated = row["input_units"] * input_rate / 1_000_000 + output_units * output_rate / 1_000_000
-    con.execute("""UPDATE ai_usage SET status=?,output_units=?,estimated_cost_usd=?,latency_ms=?,
-        error_code=?,finished_at=? WHERE id=?""",
-        ("succeeded" if succeeded else "failed", max(0, output_units), max(0, estimated),
-         max(0, latency_ms), error_code[:80], stamp(), usage_id))
+    if result_json:
+        con.execute("""UPDATE ai_usage SET status=?,output_units=?,estimated_cost_usd=?,latency_ms=?,
+            error_code=?,finished_at=?,result_json=? WHERE id=?""",
+            ("succeeded" if succeeded else "failed", max(0, output_units), max(0, estimated),
+             max(0, latency_ms), error_code[:80], stamp(), result_json[:12000], usage_id))
+    else:
+        con.execute("""UPDATE ai_usage SET status=?,output_units=?,estimated_cost_usd=?,latency_ms=?,
+            error_code=?,finished_at=? WHERE id=?""",
+            ("succeeded" if succeeded else "failed", max(0, output_units), max(0, estimated),
+             max(0, latency_ms), error_code[:80], stamp(), usage_id))
 
 
 def safe_error_code(exc: Exception) -> str:

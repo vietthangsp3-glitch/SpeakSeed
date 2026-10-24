@@ -130,7 +130,8 @@ class ConnectionAdapter:
         if wants_id:
             sql += " RETURNING id"
         cursor = self._connection.execute(sql, params)
-        lastrowid = cursor.fetchone()[0] if wants_id else None
+        returned = cursor.fetchone() if wants_id else None
+        lastrowid = returned[0] if returned else None
         return CursorAdapter(cursor, postgres=True, lastrowid=lastrowid)
 
     def executemany(self, statement: str, params):

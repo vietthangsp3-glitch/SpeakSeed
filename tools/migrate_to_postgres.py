@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 
-MINIMUM_SCHEMA_VERSION = "022_wordnet_topic_classification.sql"
+MINIMUM_SCHEMA_VERSION = "023_pronunciation_ai_usage.sql"
 REQUIRED_TABLE_COUNT = 65
 REQUIRED_PUBLISHED_CONTENT = {
     "published_words": 6280,

@@ -1,3 +1,5 @@
+import base64
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -14,6 +16,28 @@ def setup_app(tmp_path, monkeypatch):
     monkeypatch.setattr(application, "DB", database)
     application._rate.clear()
     return TestClient(application.app), database
+
+
+def seed_pronunciation_word(database):
+    with sqlite3.connect(database) as con:
+        con.execute("ATTACH DATABASE ? AS bundled", (str(application.ROOT / "speakseed.db"),))
+        columns = "word,meaning,ipa,example,topic,emoji,stage,pos,source,source_id,license,reviewed,normalized_word,example_vi,quality_score,updated_at"
+        con.execute(f"INSERT INTO library_words({columns}) SELECT {columns} FROM bundled.library_words WHERE reviewed=1 LIMIT 1")
+        con.commit()
+        return con.execute("SELECT id FROM library_words LIMIT 1").fetchone()[0]
+
+
+def fake_webm(marker=0):
+    return base64.b64encode(b"\x1aE\xdf\xa3" + bytes([marker]) + b"\0" * 256).decode()
+
+
+def valid_pronunciation_feedback():
+    return json.dumps({
+        "target_result": "clear_match", "overall_vi": "Bạn đọc đúng từ mẫu và âm thanh khá rõ.",
+        "clear_parts": ["Từ mục tiêu nghe rõ"], "improve_parts": [],
+        "correction_steps_vi": ["Nghe mẫu một lần rồi đọc lại chậm rãi."],
+        "retry_vi": "Bạn có thể ghi lại để luyện độ tự nhiên.", "needs_retry": False,
+    }, ensure_ascii=False)
 
 
 def test_cookie_session_is_httponly_and_csrf_protected(tmp_path, monkeypatch):
@@ -154,8 +178,117 @@ def test_runtime_config_keeps_live_off_by_default(monkeypatch):
     assert response.json() == {
         "gemini_live_enabled": False,
         "gemini_text_enabled": False,
+        "gemini_pronunciation_enabled": False,
+        "gemini_pronunciation_daily_limit": 5,
         "browser_speech_only": True,
+        "azure_pronunciation_enabled": False,
     }
+
+
+def test_unconfigured_advanced_pronunciation_does_not_start_provider_usage(tmp_path, monkeypatch):
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={
+        "name": "Speech", "email": "speech@example.com", "password": "correct-horse"
+    }).json()["token"]
+    word_id = seed_pronunciation_word(database)
+    response = client.post("/api/pronunciation", headers={"Authorization": "Bearer " + token},
+                           json={"word_id": word_id, "wav_base64": "not-used"})
+    assert response.status_code == 503
+    assert "Basic Practice" in response.json()["detail"]
+    with sqlite3.connect(database) as con:
+        assert con.execute("SELECT COUNT(*) FROM ai_usage").fetchone()[0] == 0
+
+
+def test_gemini_pronunciation_is_explicit_validated_and_deduplicated(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-key")
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_ENABLED", "true")
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "AI", "email": "ai@example.com", "password": "correct-horse"}).json()["token"]
+    word_id = seed_pronunciation_word(database)
+    calls = []
+
+    def mocked_provider(target, audio, mime, key, model):
+        calls.append((target, mime, key, model))
+        return valid_pronunciation_feedback(), 42
+
+    monkeypatch.setattr(application, "gemini_pronunciation_generate", mocked_provider)
+    payload = {"word_id": word_id, "target_kind": "word", "audio_base64": fake_webm(),
+               "mime_type": "audio/webm;codecs=opus", "duration_ms": 1200}
+    response = client.post("/api/pronunciation/ai", headers={"Authorization": "Bearer " + token}, json=payload)
+    assert response.status_code == 200
+    assert response.json()["feedback"]["target_result"] == "clear_match"
+    assert response.json()["cached"] is False and len(calls) == 1
+    duplicate = client.post("/api/pronunciation/ai", headers={"Authorization": "Bearer " + token}, json=payload)
+    assert duplicate.status_code == 200 and duplicate.json()["cached"] is True and len(calls) == 1
+    with sqlite3.connect(database) as con:
+        row = con.execute("SELECT status,request_fingerprint,result_json FROM ai_usage WHERE feature='pronunciation'").fetchone()
+        assert row[0] == "succeeded" and len(row[1]) == 64 and payload["audio_base64"] not in row[2]
+
+
+def test_gemini_pronunciation_rejects_bad_audio_before_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-key")
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_ENABLED", "true")
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "AI", "email": "bad@example.com", "password": "correct-horse"}).json()["token"]
+    word_id = seed_pronunciation_word(database)
+    monkeypatch.setattr(application, "gemini_pronunciation_generate", lambda *args: (_ for _ in ()).throw(AssertionError("provider called")))
+    response = client.post("/api/pronunciation/ai", headers={"Authorization": "Bearer " + token}, json={
+        "word_id": word_id, "target_kind": "word", "audio_base64": base64.b64encode(b"not audio" * 20).decode(),
+        "mime_type": "audio/webm", "duration_ms": 1000,
+    })
+    assert response.status_code == 400
+    with sqlite3.connect(database) as con:
+        assert con.execute("SELECT COUNT(*) FROM ai_usage").fetchone()[0] == 0
+
+
+def test_gemini_pronunciation_daily_quota_and_invalid_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-key")
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_DAILY_LIMIT", "5")
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "AI", "email": "quota@example.com", "password": "correct-horse"}).json()["token"]
+    word_id = seed_pronunciation_word(database)
+    monkeypatch.setattr(application, "gemini_pronunciation_generate", lambda *args: (valid_pronunciation_feedback(), 20))
+    headers = {"Authorization": "Bearer " + token}
+    for marker in range(5):
+        response = client.post("/api/pronunciation/ai", headers=headers, json={"word_id": word_id, "target_kind": "word",
+            "audio_base64": fake_webm(marker), "mime_type": "audio/webm", "duration_ms": 1000})
+        assert response.status_code == 200
+    limited = client.post("/api/pronunciation/ai", headers=headers, json={"word_id": word_id, "target_kind": "word",
+        "audio_base64": fake_webm(9), "mime_type": "audio/webm", "duration_ms": 1000})
+    assert limited.status_code == 429 and limited.headers["retry-after"] == "86400"
+
+    other = client.post("/api/register", json={"name": "Other", "email": "invalid-json@example.com", "password": "correct-horse"}).json()["token"]
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_IP_DAILY_LIMIT", "50")
+    monkeypatch.setattr(application, "gemini_pronunciation_generate", lambda *args: ("{not-json", 1))
+    malformed = client.post("/api/pronunciation/ai", headers={"Authorization": "Bearer " + other}, json={
+        "word_id": word_id, "target_kind": "word", "audio_base64": fake_webm(10),
+        "mime_type": "audio/webm", "duration_ms": 1000})
+    assert malformed.status_code == 502
+    with sqlite3.connect(database) as con:
+        assert con.execute("SELECT status FROM ai_usage WHERE user_id=(SELECT id FROM users WHERE email='invalid-json@example.com')").fetchone()[0] == "failed"
+
+
+def test_gemini_provider_quota_error_has_no_automatic_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-key")
+    monkeypatch.setenv("GEMINI_PRONUNCIATION_ENABLED", "true")
+    client, database = setup_app(tmp_path, monkeypatch)
+    token = client.post("/api/register", json={"name": "AI", "email": "provider-quota@example.com", "password": "correct-horse"}).json()["token"]
+    word_id = seed_pronunciation_word(database)
+    calls = []
+
+    def quota_error(*args):
+        calls.append(args)
+        raise application.urllib.error.HTTPError("https://provider.invalid", 429, "quota", {}, None)
+
+    monkeypatch.setattr(application, "gemini_pronunciation_generate", quota_error)
+    response = client.post("/api/pronunciation/ai", headers={"Authorization": "Bearer " + token}, json={
+        "word_id": word_id, "target_kind": "word", "audio_base64": fake_webm(12),
+        "mime_type": "audio/webm", "duration_ms": 1000})
+    assert response.status_code == 429 and len(calls) == 1
+    assert "Basic Practice" in response.json()["detail"]
 
 
 def test_production_cookie_hsts_cors_and_trusted_host(tmp_path, monkeypatch):

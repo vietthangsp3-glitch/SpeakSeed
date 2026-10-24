@@ -119,7 +119,10 @@ def main() -> None:
             raise SystemExit("Set DATABASE_URL to the authorized PostgreSQL target")
         result = backup(url, args.archive) if args.command == "backup" else restore(
             url, args.archive, args.confirm_host, args.confirm_database)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # Windows consoles may use a legacy code page; ASCII-safe JSON keeps a
+    # successful backup from being reported as failed solely because its path
+    # contains Vietnamese characters.
+    print(json.dumps(result, ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":
