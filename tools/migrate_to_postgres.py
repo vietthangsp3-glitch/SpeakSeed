@@ -13,8 +13,8 @@ import sqlite3
 from pathlib import Path
 
 
-MINIMUM_SCHEMA_VERSION = "023_pronunciation_ai_usage.sql"
-REQUIRED_TABLE_COUNT = 65
+MINIMUM_SCHEMA_VERSION = "024_dynamic_gemini_projects.sql"
+REQUIRED_TABLE_COUNT = 66
 REQUIRED_PUBLISHED_CONTENT = {
     "published_words": 6280,
     "published_grammar_lessons": 100,

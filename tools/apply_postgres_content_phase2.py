@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSIONS = ["011_content_import_pipeline.sql", "012_content_pipeline_phase2.sql", "013_content_question_payload.sql", "014_content_review_hardening.sql", "015_question_bank_integration.sql", "016_question_publication_license_gate.sql", "017_vocabulary_topics.sql", "018_vocabulary_release_workflow.sql", "019_content_license_decisions.sql", "020_automated_vocabulary_release.sql", "021_automated_topic_classification.sql", "022_wordnet_topic_classification.sql", "023_pronunciation_ai_usage.sql"]
+VERSIONS = ["011_content_import_pipeline.sql", "012_content_pipeline_phase2.sql", "013_content_question_payload.sql", "014_content_review_hardening.sql", "015_question_bank_integration.sql", "016_question_publication_license_gate.sql", "017_vocabulary_topics.sql", "018_vocabulary_release_workflow.sql", "019_content_license_decisions.sql", "020_automated_vocabulary_release.sql", "021_automated_topic_classification.sql", "022_wordnet_topic_classification.sql", "023_pronunciation_ai_usage.sql", "024_dynamic_gemini_projects.sql"]
 
 
 def apply(target_url: str) -> dict:

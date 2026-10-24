@@ -173,6 +173,7 @@ def test_vercel_platform_client_ip_header_is_used_only_on_vercel(monkeypatch):
 def test_runtime_config_keeps_live_off_by_default(monkeypatch):
     monkeypatch.delenv("GEMINI_LIVE_ENABLED", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
     response = TestClient(application.app).get("/api/runtime-config")
     assert response.status_code == 200
     assert response.json() == {
@@ -180,6 +181,7 @@ def test_runtime_config_keeps_live_off_by_default(monkeypatch):
         "gemini_text_enabled": False,
         "gemini_pronunciation_enabled": False,
         "gemini_pronunciation_daily_limit": 5,
+        "gemini_project_count": 0,
         "browser_speech_only": True,
         "azure_pronunciation_enabled": False,
     }
@@ -368,7 +370,7 @@ def test_legacy_tts_endpoint_is_hard_disabled_without_usage_or_provider_call(tmp
         assert connection.execute("SELECT COUNT(*) FROM ai_usage WHERE feature='tts'").fetchone()[0] == 0
 
 
-def test_gemini_uses_one_key_without_rotation(monkeypatch):
+def test_legacy_gemini_key_helper_returns_first_configured_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("GEMINI_API_KEYS", "first-key,second-key")
     assert application.gemini_key() == "first-key"

@@ -103,6 +103,7 @@ Sau khi kiểm tra độc lập count, liên kết, đăng nhập và tiến đ�
 - Xem usage 30 ngày của tài khoản qua `GET /api/usage`; cost là ước tính từ các biến đơn giá, không thay thế hóa đơn provider.
 - Rate limit được lưu trong DB theo tài khoản/IP. Live mặc định tối đa 10 phút và 28 MB audio; Writing/Speaking có giới hạn payload và timeout. Gemini TTS đã bị vô hiệu hóa; bài học thường dùng Web Speech API phía trình duyệt.
 - Gemini Pronunciation cần áp dụng migration `023_pronunciation_ai_usage.sql` trước, sau đó mới đặt `GEMINI_PRONUNCIATION_ENABLED=true`. Mặc định là tắt; `GEMINI_PRONUNCIATION_DAILY_LIMIT=5` và `GEMINI_PRONUNCIATION_IP_DAILY_LIMIT=15`. Không đặt key ở frontend và không bật tính năng trước khi kiểm tra quota/model trên môi trường đích.
+- Pool nhiều Google Cloud project được phép sử dụng dùng `GEMINI_API_KEYS` động, không cần biến đánh số. Ví dụ chuỗi `school-a=key-a,school-b=key-b`, hoặc JSON `[{"project":"school-a","key":"...","weight":2}]`. `GEMINI_API_KEY` vẫn được thêm như project `primary`. Migration `024_dynamic_gemini_projects.sql` chỉ lưu project ID đã băm, cooldown và bộ đếm; không lưu key. Xem trạng thái bằng `python tools/gemini_project_status.py` sau khi nạp đúng environment variables. Không dùng pool để né chính sách hoặc hạn mức tổng của nhà cung cấp.
 - Cảnh báo theo tỷ lệ 429/5xx, p95 latency, dung lượng DB/volume, quota provider và tổng cost. Không log API key, token, CSRF token, audio hay nội dung bài viết.
 - Chạy backup hàng ngày và diễn tập restore định kỳ trên host tách biệt.
 

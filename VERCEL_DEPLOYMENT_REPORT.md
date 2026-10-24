@@ -95,6 +95,11 @@ Chỉ cấu hình cho môi trường **Preview** trước. Không ghi giá trị
 | Tên | Ghi chú |
 |---|---|
 | `GEMINI_API_KEY` | Server-only. Để trống thì Tutor/Writing/Speaking AI trả thông báo cấu hình thiếu; bài thường vẫn hoạt động. |
+| `GEMINI_API_KEYS` | Tùy chọn danh sách project động (`label=key,...` hoặc JSON); server-only, không có biến đánh số. |
+| `GEMINI_FAILOVER_MAX_ATTEMPTS` | Số project tối đa thử cho một request; mặc định `2`, giới hạn an toàn `1–10`. |
+| `GEMINI_PROJECT_QUOTA_COOLDOWN_SECONDS` | Cooldown sau HTTP 429; mặc định `3600`. |
+| `GEMINI_PROJECT_ERROR_COOLDOWN_SECONDS` | Cooldown ngắn cho lỗi provider có thể thử lại; mặc định `30`. |
+| `GEMINI_PROJECT_AUTH_COOLDOWN_SECONDS` | Cooldown cho key bị từ chối 401/403; mặc định `86400`. |
 | `GEMINI_TEXT_MODEL` | Model text được phép dùng. |
 | `GEMINI_LIVE_MODEL` | Chỉ có tác dụng khi Live được bật thủ công. |
 | `GEMINI_LIVE_MAX_SECONDS` | Khuyến nghị `240` trên Hobby. |

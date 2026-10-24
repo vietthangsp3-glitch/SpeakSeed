@@ -68,7 +68,7 @@ def test_reading_answers_and_saves_only_linked_word_to_review(tmp_path, monkeypa
 def test_speaking_session_records_real_turns_and_evaluates_without_pronunciation(tmp_path, monkeypatch):
     client, database = setup_client(tmp_path, monkeypatch);headers = register(client)
     other = register(client, "other-speaker@example.com")
-    monkeypatch.setattr(application, "gemini_key", lambda: "server-only-test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "server-only-test-key")
     def fake_gemini(system, contents, key):
         if "giám khảo" in system:
             return json.dumps({"scores":{"grammar":76,"vocabulary":72,"naturalness":70,"task_completion":82},
@@ -94,7 +94,7 @@ def test_speaking_session_records_real_turns_and_evaluates_without_pronunciation
 
 def test_writing_draft_limits_feedback_and_account_scope(tmp_path, monkeypatch):
     client, database = setup_client(tmp_path, monkeypatch);first = register(client);second = register(client,"other-writer@example.com")
-    monkeypatch.setattr(application, "gemini_key", lambda: "server-only-test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "server-only-test-key")
     monkeypatch.setattr(application, "await_gemini_sync", lambda system, contents, key: json.dumps({
         "dimensions":{name:{"score":80,"comment_vi":"Rõ ràng."} for name in ("grammar","vocabulary","coherence","naturalness")},
         "errors":[],"summary_vi":"Bài đáp ứng yêu cầu luyện tập."}))

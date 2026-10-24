@@ -113,6 +113,7 @@ Test bao phủ migration, tính lặp lại của ba importer, ràng buộc ch�
 - Gemini Speaking từng lượt vẫn dùng quota xử lý văn bản; câu trả lời được đọc bằng Web Speech API. Gemini Live chỉ kết nối sau cảnh báo và thao tác bắt đầu của người dùng. Backend Gemini TTS đã bị khóa; cache cũ được giữ lại nhưng không phục vụ hoặc tạo audio mới.
 - Luyện phát âm có Basic Practice bằng Web Speech Recognition, Gemini audio assessment tùy chọn và Azure nâng cao tùy chọn. Gemini chỉ nhận bản ghi sau nút “Chấm bằng AI”, không cho điểm 0–100, mặc định giới hạn 5 lượt/tài khoản/ngày và không lưu audio.
 - API key không được gửi xuống frontend.
+- Có thể cấu hình một hoặc nhiều Google Cloud project được phép sử dụng qua `GEMINI_API_KEY` và danh sách động `GEMINI_API_KEYS`; không có giới hạn số key trong logic. Pool theo dõi thành công/lỗi/quota/cooldown bằng project ID đã băm và chỉ failover hữu hạn sau lỗi provider có thể thử lại. Quota SpeakSeed theo tài khoản/IP vẫn áp dụng trước khi chọn project; pool không được dùng để né chính sách hoặc hạn mức tổng của nhà cung cấp.
 
 ## Giới hạn hiện tại
 

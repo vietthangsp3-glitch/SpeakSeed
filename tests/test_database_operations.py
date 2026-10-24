@@ -40,7 +40,7 @@ def test_postgres_migration_plan_covers_schema_without_writing(tmp_path):
     words = next(table for table in plan["tables"] if table["name"] == "library_words")
     partial = next(sql for sql in index_ddls(words) if "idx_library_words_one_published" in sql)
     assert "WHERE reviewed=1 AND normalized_word != ''" in partial
-    assert plan["latest_schema_version"] == "023_pronunciation_ai_usage.sql"
+    assert plan["latest_schema_version"] == "024_dynamic_gemini_projects.sql"
 
 
 def test_release_postgres_preflight_accepts_verified_content():
@@ -48,7 +48,7 @@ def test_release_postgres_preflight_accepts_verified_content():
     root = Path(__file__).resolve().parents[1]
     plan = inspect(root / "speakseed.db")
     validate_release_source(plan)
-    assert len(plan["tables"]) == 65
+    assert len(plan["tables"]) == 66
     assert plan["content"] == {
         "published_words": 6280,
         "published_grammar_lessons": 100,

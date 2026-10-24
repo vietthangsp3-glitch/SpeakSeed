@@ -25,6 +25,7 @@ from personalization import (
 from question_bank import CONTEXTS as QUESTION_CONTEXTS, check as check_bank_question
 from question_bank import public_item as public_bank_question, published_rows as published_bank_rows
 from vocabulary_release import candidate_queue, edit_candidate, edit_candidate_topics, publish_batch, require_role, review_batch, rollback_batch
+from gemini_pool import GeminiProject, parse_gemini_projects, retryable_provider_error
 
 ROOT=Path(__file__).parent
 DB=configured_database(ROOT/'speakseed.db')
@@ -306,7 +307,7 @@ def health_live():
  return {'status':'ok'}
 
 def _gemini_key_configured():
- return bool(os.getenv('GEMINI_API_KEY','').strip() or next((x.strip() for x in os.getenv('GEMINI_API_KEYS','').split(',') if x.strip()),''))
+ return bool(gemini_projects())
 
 def _gemini_live_enabled():
  return os.getenv('GEMINI_LIVE_ENABLED','false').lower()=='true' and _gemini_key_configured()
@@ -325,6 +326,7 @@ def runtime_config():
   'gemini_text_enabled':_gemini_key_configured(),
   'gemini_pronunciation_enabled':_gemini_pronunciation_enabled(),
   'gemini_pronunciation_daily_limit':_bounded_env_int('GEMINI_PRONUNCIATION_DAILY_LIMIT',5,1,50),
+  'gemini_project_count':len(gemini_projects()),
   'browser_speech_only':True,
   'azure_pronunciation_enabled':bool(os.getenv('AZURE_SPEECH_KEY','').strip() and os.getenv('AZURE_SPEECH_REGION','').strip()),
  }
@@ -996,7 +998,7 @@ def speaking_session_evaluate(data:SpeakingEvaluation,request:Request,user=Depen
  model=os.getenv('GEMINI_TEXT_MODEL','gemini-2.5-flash')
  usage_id,usage_started=metered_start(request,user['id'],'speaking_evaluation',model,max(1,len(prompt)//4))
  try:
-  raw=await_gemini_sync(system,[{'role':'user','parts':[{'text':prompt}]}],gemini_key())
+  raw=gemini_pool_call(lambda key:await_gemini_sync(system,[{'role':'user','parts':[{'text':prompt}]}],key),usage_id)
   result=_extract_json_object(raw);scores=result.get('scores',{})
   required=('grammar','vocabulary','naturalness','task_completion')
   if set(required)-set(scores) or any(not isinstance(scores[x],(int,float)) or not 0<=scores[x]<=100 for x in required):raise ValueError('Invalid scores')
@@ -1062,7 +1064,7 @@ def writing_submit(data:WritingSubmission,request:Request,user=Depends(current))
  model=os.getenv('GEMINI_TEXT_MODEL','gemini-2.5-flash')
  usage_id,usage_started=metered_start(request,user['id'],'writing_feedback',model,max(1,len(prompt)//4))
  try:
-  raw=await_gemini_sync(system,[{'role':'user','parts':[{'text':prompt}]}],gemini_key());feedback=_extract_json_object(raw)
+  raw=gemini_pool_call(lambda key:await_gemini_sync(system,[{'role':'user','parts':[{'text':prompt}]}],key),usage_id);feedback=_extract_json_object(raw)
   dimensions=feedback.get('dimensions',{});required=('grammar','vocabulary','coherence','naturalness')
   for name in required:
    score=dimensions.get(name,{}).get('score') if isinstance(dimensions.get(name),dict) else None
@@ -1086,9 +1088,8 @@ def writing_submit(data:WritingSubmission,request:Request,user=Depends(current))
   metered_finish(usage_id,usage_started,False,error_code=safe_error_code(exc))
   logging.exception('Writing feedback failed');raise HTTPException(502,'Không thể tạo phản hồi Writing lúc này; bản nháp vẫn được giữ')
 
-# Gemini keys are server-side only. Exactly one configured key is used; SpeakSeed
-# never rotates keys to evade a provider quota.
-import threading
+# Gemini keys remain server-side. The request limits below are enforced before
+# the authorized project pool selects a provider key.
 _rate_lock=threading.Lock()
 _rate={}
 def throttle(user_id,action,limit=25,window=3600):
@@ -1112,13 +1113,69 @@ def metered_finish(usage_id:int,started:float,succeeded:bool,output_units:int=0,
  with connect() as c:finish_ai_usage(c,usage_id,succeeded=succeeded,output_units=max(0,output_units),
   latency_ms=int((time.perf_counter()-started)*1000),error_code=error_code,result_json=result_json)
 
+def gemini_projects()->list[GeminiProject]:
+ return parse_gemini_projects(os.getenv('GEMINI_API_KEY',''),os.getenv('GEMINI_API_KEYS',''))
+
 def gemini_key():
- configured=os.getenv('GEMINI_API_KEY','').strip()
- legacy=[x.strip() for x in os.getenv('GEMINI_API_KEYS','').split(',') if x.strip()]
- key=configured or (legacy[0] if legacy else '')
- if not key: raise HTTPException(503,'Chưa cấu hình GEMINI_API_KEY trên server. Các bài không dùng AI vẫn học bình thường.')
- if len(legacy)>1: logging.getLogger('speakseed.security').warning('Multiple legacy Gemini keys configured; only the first key is used')
- return key
+ """Compatibility helper; provider routes use the managed pool below."""
+ projects=gemini_projects()
+ if not projects:raise HTTPException(503,'Chưa cấu hình Gemini API key trên server. Các bài không dùng AI vẫn học bình thường.')
+ return projects[0].key
+
+_gemini_pool_lock=threading.Lock()
+
+def acquire_gemini_project(excluded:set[str]|None=None)->GeminiProject:
+ projects=gemini_projects();excluded=excluded or set()
+ if not projects:raise HTTPException(503,'Chưa cấu hình Gemini API key trên server. Các bài không dùng AI vẫn học bình thường.')
+ current=now()
+ with _gemini_pool_lock:
+  with connect() as c:
+   for project in projects:
+    c.execute('''INSERT INTO gemini_project_state(project_id,project_label,weight,updated_at)
+     VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET project_label=excluded.project_label,
+     weight=excluded.weight,updated_at=excluded.updated_at''',(project.project_id,project.label,project.weight,current))
+   states={row['project_id']:dict(row) for row in c.execute('SELECT * FROM gemini_project_state')}
+   eligible=[project for project in projects if project.project_id not in excluded and
+    (not states[project.project_id]['cooldown_until'] or states[project.project_id]['cooldown_until']<=current)]
+   if not eligible:
+    raise HTTPException(429,'Tất cả project Gemini đang cooldown hoặc hết quota. Các bài không dùng AI vẫn hoạt động bình thường.',headers={'Retry-After':'60'})
+   chosen=min(eligible,key=lambda project:(states[project.project_id]['selection_count']/project.weight,
+    states[project.project_id]['last_selected_at'] or '',project.project_id))
+   c.execute('''UPDATE gemini_project_state SET selection_count=selection_count+1,last_selected_at=?,
+    last_status='selected',updated_at=? WHERE project_id=?''',(current,current,chosen.project_id))
+ return chosen
+
+def bind_usage_project(usage_id:int|None,project_id:str)->None:
+ if usage_id is None:return
+ with connect() as c:c.execute('UPDATE ai_usage SET provider_project_id=? WHERE id=?',(project_id,usage_id))
+
+def record_gemini_project_result(project:GeminiProject,succeeded:bool,exc:Exception|None=None)->None:
+ current_dt=datetime.now(timezone.utc);current=current_dt.isoformat();code=getattr(exc,'code',None)
+ cooldown=0
+ if not succeeded:
+  if code==429:cooldown=_bounded_env_int('GEMINI_PROJECT_QUOTA_COOLDOWN_SECONDS',3600,30,86400)
+  elif code in {401,403}:cooldown=_bounded_env_int('GEMINI_PROJECT_AUTH_COOLDOWN_SECONDS',86400,300,604800)
+  elif retryable_provider_error(exc or Exception()):cooldown=_bounded_env_int('GEMINI_PROJECT_ERROR_COOLDOWN_SECONDS',30,5,3600)
+ status='ok' if succeeded else safe_error_code(exc or Exception())
+ until=(current_dt+timedelta(seconds=cooldown)).isoformat() if cooldown else None
+ with connect() as c:
+  c.execute('''UPDATE gemini_project_state SET success_count=success_count+?,failure_count=failure_count+?,
+   quota_failure_count=quota_failure_count+?,cooldown_until=?,last_status=?,updated_at=? WHERE project_id=?''',
+   (int(succeeded),int(not succeeded),int(code==429),until,status,current,project.project_id))
+
+def gemini_pool_call(callback,usage_id:int|None=None):
+ projects=gemini_projects()
+ max_attempts=min(len(projects),_bounded_env_int('GEMINI_FAILOVER_MAX_ATTEMPTS',2,1,10))
+ excluded:set[str]=set();last_error:Exception|None=None
+ for attempt in range(max_attempts):
+  project=acquire_gemini_project(excluded);excluded.add(project.project_id);bind_usage_project(usage_id,project.project_id)
+  try:
+   result=callback(project.key);record_gemini_project_result(project,True);return result
+  except Exception as exc:
+   last_error=exc;record_gemini_project_result(project,False,exc)
+   if attempt+1>=max_attempts or not retryable_provider_error(exc):raise
+ if last_error:raise last_error
+ raise HTTPException(503,'Không có project Gemini khả dụng')
 
 def await_gemini_sync(system,contents,key):
  model=os.getenv('GEMINI_TEXT_MODEL','gemini-2.5-flash')
@@ -1224,8 +1281,7 @@ def speaking_turn(data:SpeakingTurn,request:Request,user=Depends(current)):
  input_units=max(1,(len(system)+sum(len(str(x)) for x in contents))//4)
  usage_id,usage_started=metered_start(request,user['id'],'speaking_turn',model,input_units)
  try:
-  key=gemini_key()
-  reply=await_gemini_sync(system,contents,key)
+  reply=gemini_pool_call(lambda key:await_gemini_sync(system,contents,key),usage_id)
   stamp=now()
   with connect() as c:
    if session:
@@ -1267,7 +1323,7 @@ async def live_proxy(ws:WebSocket):
  if not _gemini_live_enabled():
   await ws.send_json({'error':'Gemini Live đang tắt trong môi trường thử nghiệm này.'})
   await ws.close(code=1008);return
- upstream=None;live_session=None;live_transcript=[];user=None
+ upstream=None;live_session=None;live_transcript=[];user=None;live_project=None;live_project_recorded=False
  usage_id=None;usage_started=time.perf_counter();usage_error='';activity_recorded=False;audio_received=False
  try:
   first=await asyncio.wait_for(ws.receive_json(),timeout=8)
@@ -1298,11 +1354,12 @@ async def live_proxy(ws:WebSocket):
    except Exception:
     c.commit();raise
   usage_started=time.perf_counter()
-  key=gemini_key()
+  live_project=acquire_gemini_project();bind_usage_project(usage_id,live_project.project_id);key=live_project.key
   import websockets
   from urllib.parse import quote
   url='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key='+quote(key)
   upstream=await websockets.connect(url,max_size=12_000_000,open_timeout=15)
+  record_gemini_project_result(live_project,True);live_project_recorded=True
   setup={'setup':{'model':'models/'+model,'generationConfig':{'responseModalities':['AUDIO']},'systemInstruction':{'parts':[{'text':f'You are SpeakSeed, a patient English speaking partner for a Vietnamese learner at {level} level. Topic: {topic}. Speak slowly and naturally, with short responses. Ask one question at a time. Help gently when they struggle.'}]},'inputAudioTranscription':{},'outputAudioTranscription':{}}}
   await upstream.send(json.dumps(setup))
   await ws.send_json({'status':'connecting'})
@@ -1350,6 +1407,7 @@ async def live_proxy(ws:WebSocket):
    except (WebSocketDisconnect,asyncio.CancelledError):pass
  except Exception as exc:
   logging.warning('Live session closed: %s',type(exc).__name__)
+  if live_project and not live_project_recorded:record_gemini_project_result(live_project,False,exc)
   usage_error=safe_error_code(exc)
   try:await ws.send_json({'error':'Không kết nối được Gemini Live. Kiểm tra API key, model và quota.'})
   except Exception:pass
@@ -1378,8 +1436,7 @@ def chat(data:Chat,request:Request,user=Depends(current)):
  model=os.getenv('GEMINI_TEXT_MODEL','gemini-2.5-flash')
  usage_id,usage_started=metered_start(request,user['id'],'tutor',model,max(1,(len(system)+len(data.message))//4))
  try:
-  key=gemini_key()
-  reply=await_gemini_sync(system,[{'role':'user','parts':[{'text':data.message}]}],key)
+  reply=gemini_pool_call(lambda key:await_gemini_sync(system,[{'role':'user','parts':[{'text':data.message}]}],key),usage_id)
   metered_finish(usage_id,usage_started,True,max(1,len(reply)//4))
   return {'reply':reply}
  except HTTPException as exc:
@@ -1433,7 +1490,7 @@ def pronunciation_ai(data:GeminiPronunciation,request:Request,user=Depends(curre
  usage_id,usage_started=metered_start(request,user['id'],'pronunciation',model,len(audio),
   account_limit=account_limit,ip_limit=ip_limit,window_seconds=86400,model_scope=model,request_fingerprint=fingerprint)
  try:
-  raw,output_units=gemini_pronunciation_generate(target,data.audio_base64,mime_type,gemini_key(),model)
+  raw,output_units=gemini_pool_call(lambda key:gemini_pronunciation_generate(target,data.audio_base64,mime_type,key,model),usage_id)
   feedback=validate_pronunciation_feedback(raw)
   result={'target':target,'feedback':feedback,'model':model,'cached':False}
   metered_finish(usage_id,usage_started,True,output_units,result_json=json.dumps(result,ensure_ascii=False))
