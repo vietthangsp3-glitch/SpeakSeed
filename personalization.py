@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -35,16 +36,18 @@ def ensure_profile(con, user_id: int, stamp: str) -> dict:
     return dict(con.execute("SELECT * FROM learner_profiles WHERE user_id=?", (user_id,)).fetchone())
 
 
-def _spread(rows: list, count: int) -> list:
-    """Pick deterministic, well-spaced records without changing source data."""
+def _sample(rows: list, count: int, rng: random.Random, excluded: set[str], key_prefix: str) -> list:
+    """Prefer unseen records, then fill from the complete reviewed pool."""
     if len(rows) < count:
         raise RuntimeError(f"Không đủ nội dung placement: cần {count}, có {len(rows)}")
-    if count == 1:
-        return [rows[len(rows) // 2]]
-    return [rows[round(index * (len(rows) - 1) / (count - 1))] for index in range(count)]
+    unseen = [row for row in rows if f"{key_prefix}:{row['id']}" not in excluded]
+    seen = [row for row in rows if f"{key_prefix}:{row['id']}" in excluded]
+    rng.shuffle(unseen); rng.shuffle(seen)
+    return (unseen + seen)[:count]
 
 
-def _grammar_items(con, kind: str, targets: dict[str, int], section: str) -> list[dict]:
+def _grammar_items(con, kind: str, targets: dict[str, int], section: str,
+                   rng: random.Random, excluded: set[str]) -> list[dict]:
     output = []
     for level, target in targets.items():
         rows = con.execute(
@@ -54,7 +57,7 @@ def _grammar_items(con, kind: str, targets: dict[str, int], section: str) -> lis
                WHERE e.published=1 AND l.published=1 AND e.kind=? AND e.level=?
                ORDER BY l.sequence,e.sequence,e.id""", (kind, level)
         ).fetchall()
-        for row in _spread(list(rows), target):
+        for row in _sample(list(rows), target, rng, excluded, section):
             answers = json.loads(row["answers_json"])
             item = {
                 "key": f"{section}:{row['id']}", "section": section,
@@ -74,51 +77,44 @@ def _grammar_items(con, kind: str, targets: dict[str, int], section: str) -> lis
     return output
 
 
-def placement_questions(con) -> list[dict]:
-    """Build the deterministic, balanced 40-item Placement Test v2."""
+def placement_questions(con, excluded_keys: set[str] | None = None, seed: int | None = None) -> list[dict]:
+    """Build a randomized, balanced 40-item form, preferring unseen questions."""
+    excluded = excluded_keys or set()
+    rng = random.Random(seed) if seed is not None else random.SystemRandom()
     if os.getenv("QUESTION_BANK_PLACEMENT_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
-        bank_form = placement_form(con)
+        bank_form = placement_form(con, excluded_keys=excluded, rng=rng)
         if bank_form is not None:
             return bank_form
     questions = _grammar_items(
-        con, "multiple_choice", {"A0": 3, "A1": 1, "A2": 1, "B1": 1, "B2": 1}, "grammar"
+        con, "multiple_choice", {"A0": 3, "A1": 1, "A2": 1, "B1": 1, "B2": 1}, "grammar", rng, excluded
     )
 
     # The reviewed CEFR vocabulary bank starts at A1. A0 evidence comes from
     # grammar/listening/reading instead of inventing A0 vocabulary records.
-    curated_vocab = {
-        "A1": ("expensive", "tooth"), "A2": ("printer",),
-        "B1": ("bilingual",), "B2": ("campaign",),
-    }
-    for level, terms in curated_vocab.items():
+    vocabulary_targets = {"A1": 2, "A2": 1, "B1": 1, "B2": 1}
+    for level, target in vocabulary_targets.items():
         rows = list(con.execute(
             """SELECT id,word,meaning,pos,topic,source,license,reviewed
-               FROM library_words WHERE reviewed=1 AND stage=? AND word IN (""" +
-            ",".join("?" for _ in terms) + ") ORDER BY word", (level, *terms)
+               FROM library_words WHERE reviewed=1 AND stage=?
+                 AND trim(word)<>'' AND trim(meaning)<>''
+               ORDER BY word,id""", (level,)
         ).fetchall())
-        if {row["word"] for row in rows} != set(terms):
-            raise RuntimeError(f"Thiếu từ vựng placement đã chọn cho {level}")
-        for offset, row in enumerate(rows):
-            distractors = con.execute(
-                """SELECT meaning FROM library_words
-                   WHERE reviewed=1 AND stage=? AND id<>? AND meaning<>? AND pos=?
-                   GROUP BY meaning ORDER BY MIN(id) LIMIT 3 OFFSET ?""",
-                (level, row["id"], row["meaning"], row["pos"], offset * 3),
-            ).fetchall()
-            if len(distractors) < 3:
-                distractors = con.execute(
-                    """SELECT meaning FROM library_words
-                       WHERE reviewed=1 AND stage=? AND id<>? AND meaning<>?
-                       GROUP BY meaning ORDER BY MIN(id) LIMIT 3""",
-                    (level, row["id"], row["meaning"]),
-                ).fetchall()
-            options = [row["meaning"], *[x["meaning"] for x in distractors]]
-            rotation = row["id"] % len(options)
+        for row in _sample(rows, target, rng, excluded, "vocabulary"):
+            distractor_pool = [x["meaning"] for x in rows
+                               if x["id"] != row["id"] and x["meaning"] != row["meaning"]
+                               and (not row["pos"] or not x["pos"] or x["pos"] == row["pos"])]
+            distractor_pool = list(dict.fromkeys(distractor_pool))
+            if len(distractor_pool) < 3:
+                distractor_pool = list(dict.fromkeys(
+                    [x["meaning"] for x in rows if x["id"] != row["id"] and x["meaning"] != row["meaning"]]
+                ))
+            options = [row["meaning"], *rng.sample(distractor_pool, 3)]
+            rng.shuffle(options)
             questions.append({
                 "key": f"vocabulary:{row['id']}", "section": "vocabulary",
                 "domain": "vocabulary", "kind": "multiple_choice", "level": level,
                 "topic": row["topic"], "prompt": f"Từ “{row['word']}” có nghĩa nào?",
-                "options": options[rotation:] + options[:rotation], "answers": [row["meaning"]],
+                "options": options, "answers": [row["meaning"]],
                 "explanation_vi": f"“{row['word']}” có nghĩa là “{row['meaning']}”.",
                 "source": row["source"], "license": row["license"],
                 "review_status": "automated_checked", "word_id": row["id"],
@@ -138,8 +134,7 @@ def placement_questions(con) -> list[dict]:
         kinds = ["multiple_choice", "fill_blank"] if target == 2 else ["multiple_choice" if LEVEL_RANK[level] % 2 else "fill_blank"]
         for kind_index, kind in enumerate(kinds):
             pool = by_kind[kind]
-            position = round((kind_index + 1) * (len(pool) - 1) / (len(kinds) + 1)) if len(kinds) > 1 else len(pool) // 2
-            row = pool[position]
+            row = _sample(pool, 1, rng, excluded, "listening")[0]
             questions.append({
                 "key": f"listening:{row['id']}", "section": "listening", "domain": "listening",
                 "kind": "listening_" + row["kind"], "level": level, "topic": row["title"],
@@ -152,10 +147,10 @@ def placement_questions(con) -> list[dict]:
             })
 
     questions.extend(_grammar_items(
-        con, "fill_blank", {"A0": 1, "A1": 1, "A2": 2, "B1": 2, "B2": 2}, "fill_blank"
+        con, "fill_blank", {"A0": 1, "A1": 1, "A2": 2, "B1": 2, "B2": 2}, "fill_blank", rng, excluded
     ))
     questions.extend(_grammar_items(
-        con, "sentence_ordering", {"A0": 1, "A1": 1, "A2": 1, "B1": 1, "B2": 2}, "sentence_ordering"
+        con, "sentence_ordering", {"A0": 1, "A1": 1, "A2": 1, "B1": 1, "B2": 2}, "sentence_ordering", rng, excluded
     ))
 
     for level, target in {"A0": 1, "A1": 1, "A2": 1, "B1": 2, "B2": 1}.items():
@@ -166,7 +161,7 @@ def placement_questions(con) -> list[dict]:
                WHERE l.skill='reading' AND l.level=? AND l.published=1
                ORDER BY l.sequence,q.sequence""", (level,)
         ).fetchall())
-        for row in _spread(rows, target):
+        for row in _sample(rows, target, rng, excluded, "reading"):
             questions.append({
                 "key": f"reading:{row['id']}", "section": "reading", "domain": "reading",
                 "kind": "reading_comprehension", "level": level, "topic": row["title"],
@@ -177,8 +172,7 @@ def placement_questions(con) -> list[dict]:
                 "lesson_id": row["lesson_id"], "lesson_title": row["title"],
             })
 
-    section_order = {name: index for index, name in enumerate(PLACEMENT_SECTION_WEIGHTS)}
-    questions.sort(key=lambda item: (LEVEL_RANK[item["level"]], section_order[item["section"]], item["key"]))
+    rng.shuffle(questions)
     if len(questions) != 40:
         raise RuntimeError(f"Placement test phải có 40 câu, hiện có {len(questions)}")
     return questions
@@ -370,10 +364,30 @@ def learning_path(con, user_id: int, stamp: str) -> dict:
         previous_completed = previous_completed and completed
     next_lesson = next((item for item in lessons if item["unlocked"] and not item["completed"]), None)
     skill_paths = four_skill_paths(con, user_id, level)
+    journey = []
+    previous_unit_completed = True
+    for unit in con.execute(
+        "SELECT id,sequence,title,description_vi FROM grammar_units WHERE level=? AND published=1 ORDER BY sequence",
+        (level,),
+    ):
+        unit_lessons = [item for item in lessons if item["unit_id"] == unit["id"]]
+        completed_count = sum(item["completed"] for item in unit_lessons)
+        completed = bool(unit_lessons) and completed_count == len(unit_lessons)
+        status = "completed" if completed else ("in_progress" if previous_unit_completed else "locked")
+        activities = [{"kind": "vocabulary", "label": "Từ vựng theo cấp độ", "target": 10}]
+        for skill in ("listening", "reading"):
+            candidates = skill_paths[skill]["lessons"]
+            if candidates:
+                activity = candidates[min(unit["sequence"] - 1, len(candidates) - 1)]
+                activities.append({"kind": skill, "label": activity["title"],
+                                   "lesson_id": activity["id"], "completed": activity["completed"]})
+        journey.append({**dict(unit), "status": status, "completed_lessons": completed_count,
+                        "total_lessons": len(unit_lessons), "activities": activities})
+        previous_unit_completed = previous_unit_completed and completed
     return {
         "profile": {key: profile[key] for key in ("recommended_level", "current_level", "daily_goal_minutes", "timezone", "placement_completed_at")},
         "level": level, "lessons": lessons, "next_lesson": next_lesson,
-        "skill_paths": skill_paths,
+        "skill_paths": skill_paths, "journey": journey,
         "weak_skills": weak_skills(con, user_id),
         "unlock_rule": "Mỗi chuỗi bài mở từ bài đầu. Bài tiếp theo chỉ được đề xuất sau khi backend có bằng chứng hoàn thành bài trước.",
     }
@@ -488,6 +502,9 @@ def dashboard(con, user_id: int, stamp: str) -> dict:
     completed_lessons = con.execute(
         "SELECT COUNT(*) FROM grammar_lesson_progress WHERE user_id=? AND completed=1", (user_id,)
     ).fetchone()[0]
+    mastered_words = con.execute(
+        "SELECT COUNT(*) FROM progress WHERE user_id=? AND level>=3", (user_id,)
+    ).fetchone()[0]
     correct = vocabulary["correct"] + grammar["correct"] + core["correct"] + library["correct"] + objective_skills["correct"]
     attempts = vocabulary["attempts"] + grammar["attempts"] + core["attempts"] + library["attempts"] + objective_skills["attempts"]
     activity_dates = [row[0] for row in con.execute(
@@ -505,15 +522,50 @@ def dashboard(con, user_id: int, stamp: str) -> dict:
     while cursor.isoformat() in dates:
         streak += 1
         cursor -= timedelta(days=1)
+    xp_rates = {
+        "vocabulary_learning": 5, "vocabulary_review": 3, "grammar_answer": 5,
+        "listening_answer": 4, "exercise_answer": 4, "skill_listening_answer": 7,
+        "reading_answer": 7, "reading_word_saved": 2, "speaking_evaluation": 10,
+        "writing_submission": 10, "speaking_turn": 2, "speaking_live": 10,
+    }
+    # XP is derived from durable evidence. Replaying the same graded activity does
+    # not mint more XP; SRS can earn XP once per word per calendar day.
+    awards = {}
+    for event in con.execute(
+        "SELECT event_type,ref_type,ref_id,correct,occurred_at FROM learning_events WHERE user_id=? ORDER BY occurred_at,id",
+        (user_id,),
+    ):
+        day = event["occurred_at"][:10]
+        identity = event["ref_id"] if event["ref_id"] is not None else day
+        key = (event["event_type"], event["ref_type"], identity,
+               day if event["event_type"] == "vocabulary_review" else "")
+        points = xp_rates.get(event["event_type"], 0)
+        if event["correct"] == 0:
+            points = min(points, 1)
+        previous = awards.get(key)
+        if previous is None or points > previous[0]:
+            awards[key] = (points, day)
+    xp_total = sum(points for points, _ in awards.values())
+    xp_today = sum(points for points, day in awards.values() if day == today.isoformat())
+    daily_xp_goal = max(10, profile["daily_goal_minutes"] * 2)
+    achievements = [
+        {"key": "first_word", "label": "Hạt mầm đầu tiên", "earned": vocabulary["learned"] >= 1},
+        {"key": "ten_words", "label": "10 từ đã học", "earned": vocabulary["learned"] >= 10},
+        {"key": "grammar_start", "label": "Bắt đầu ngữ pháp", "earned": completed_lessons >= 1},
+        {"key": "streak_3", "label": "Chuỗi 3 ngày", "earned": streak >= 3},
+    ]
     path = learning_path(con, user_id, stamp)
     return {
         "profile": {"current_level": profile["current_level"], "recommended_level": profile["recommended_level"],
                     "daily_goal_minutes": profile["daily_goal_minutes"]},
-        "metrics": {"learned_words": vocabulary["learned"], "due_words": vocabulary["due"],
+        "metrics": {"learned_words": vocabulary["learned"], "mastered_words": mastered_words,
+                    "due_words": vocabulary["due"],
                     "accuracy": round(correct / attempts, 3) if attempts else None,
                     "grammar_completed_lessons": completed_lessons, "grammar_total_lessons": 100,
-                    "streak_days": streak, "skills": skill_metrics},
+                    "streak_days": streak, "xp_total": xp_total, "xp_today": xp_today,
+                    "daily_xp_goal": daily_xp_goal, "skills": skill_metrics},
         "daily_plan": daily_plan(con, user_id, stamp),
         "weak_skills": path["weak_skills"], "next_lesson": path["next_lesson"],
+        "journey": path["journey"], "achievements": achievements,
         "accuracy_note": "Độ chính xác chỉ tính các lượt đã được backend chấm; chưa có dữ liệu thì hiển thị chưa đủ dữ liệu.",
     }

@@ -342,15 +342,38 @@ def usage_summary(user=Depends(current)):
   'cost_note':'Chi phí chỉ là ước tính theo đơn giá cấu hình trên server; giá trị 0 nghĩa là chưa cấu hình đơn giá, không có nghĩa dịch vụ miễn phí.'}
 
 @app.get('/api/words')
-def words(level:str|None=None,topic:str|None=None):
+def words(level:str|None=None,topic:str|None=None,page:int|None=None,page_size:int|None=None,q:str|None=None):
  if level is not None and level not in ('A0','A1','A2','B1','B2'):raise HTTPException(400,'Cấp độ không hợp lệ')
+ if page is not None and page<1:raise HTTPException(400,'Trang không hợp lệ')
+ if page_size is not None and not 1<=page_size<=200:raise HTTPException(400,'Kích thước trang phải từ 1 đến 200')
  with library_db() as c:
   params=[];where=['w.reviewed=1']
   if level is not None:where.append('w.stage=?');params.append('A1' if level=='A0' else level)
   if topic is not None:where.append('EXISTS(SELECT 1 FROM vocabulary_topic_words tw JOIN vocabulary_topics t ON t.id=tw.topic_id WHERE tw.word_id=w.id AND tw.published=1 AND t.active=1 AND t.slug=?)');params.append(topic)
-  rows=[dict(r) for r in c.execute("SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage FROM library_words w WHERE "+' AND '.join(where)+" ORDER BY CASE w.stage WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 WHEN 'A2' THEN 2 WHEN 'B1' THEN 3 WHEN 'B2' THEN 4 END,w.word",params)]
+  if q and q.strip():where.append('(LOWER(w.word) LIKE ? OR LOWER(w.meaning) LIKE ?)');needle='%'+q.strip().lower()+'%';params.extend((needle,needle))
+  sql="SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage FROM library_words w WHERE "+' AND '.join(where)+" ORDER BY CASE w.stage WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 WHEN 'A2' THEN 2 WHEN 'B1' THEN 3 WHEN 'B2' THEN 4 END,w.word"
+  if page_size is not None:
+   sql+=' LIMIT ? OFFSET ?';params.extend((page_size,((page or 1)-1)*page_size))
+  rows=[dict(r) for r in c.execute(sql,params)]
   _attach_word_topics(c,rows)
- return rows if rows or level is not None or topic is not None else [dict(w,stage=['A0','A1.1','A1.2','A2.1','A2.2','B1'][min(5,i//6)]) for i,w in enumerate(WORD_DICT.values())]
+ return rows if rows or level is not None or topic is not None or q is not None or page_size is not None else [dict(w,stage=['A0','A1.1','A1.2','A2.1','A2.2','B1'][min(5,i//6)]) for i,w in enumerate(WORD_DICT.values())]
+
+@app.get('/api/vocabulary/library')
+def vocabulary_library(level:str='A1',topic:str|None=None,page:int=1,page_size:int=80,q:str|None=None):
+ if level not in ('A0','A1','A2','B1','B2'):raise HTTPException(400,'Cấp độ không hợp lệ')
+ if page<1 or not 1<=page_size<=200:raise HTTPException(400,'Phân trang không hợp lệ')
+ actual_level='A1' if level=='A0' else level
+ with library_db() as c:
+  params=[actual_level];where=['w.reviewed=1','w.stage=?']
+  if topic:
+   where.append('EXISTS(SELECT 1 FROM vocabulary_topic_words tw JOIN vocabulary_topics t ON t.id=tw.topic_id WHERE tw.word_id=w.id AND tw.published=1 AND t.active=1 AND t.slug=?)');params.append(topic)
+  if q and q.strip():
+   where.append('(LOWER(w.word) LIKE ? OR LOWER(w.meaning) LIKE ?)');needle='%'+q.strip().lower()+'%';params.extend((needle,needle))
+  total=c.execute('SELECT COUNT(*) total FROM library_words w WHERE '+' AND '.join(where),params).fetchone()['total']
+  rows=[dict(r) for r in c.execute('SELECT w.id,w.word,w.meaning,w.ipa,w.pos,w.example,w.example_vi,w.topic,w.emoji,w.stage FROM library_words w WHERE '+' AND '.join(where)+' ORDER BY w.word,w.id LIMIT ? OFFSET ?',[*params,page_size,(page-1)*page_size])]
+  _attach_word_topics(c,rows)
+ return {'items':rows,'page':page,'page_size':page_size,'total':total,
+         'has_more':page*page_size<total,'level':level,'topic':topic}
 
 def _attach_word_topics(c,rows):
  ids={row['id'] for row in rows}
@@ -470,12 +493,15 @@ def placement_start(user=Depends(current)):
      'SELECT question_key,answer,state FROM placement_responses WHERE attempt_id=? AND user_id=?',(active['id'],user['id']))}
     return {'attempt_id':active['id'],'question_count':40,'questions':public_questions(saved_questions),
             'responses':responses,'resumed':True,'limitation':PLACEMENT_LIMITATION}
-  questions=placement_questions(c)
+  previous=c.execute("SELECT questions_json FROM placement_attempts WHERE user_id=? AND status='completed' ORDER BY id DESC LIMIT 1",(user['id'],)).fetchone()
+  previous_keys={item['key'] for item in json.loads(previous['questions_json'])} if previous else set()
+  questions=placement_questions(c,excluded_keys=previous_keys)
+  overlap=len(previous_keys & {item['key'] for item in questions})
   cur=c.execute('''INSERT INTO placement_attempts(user_id,questions_json,started_at)
    VALUES(?,?,?)''',(user['id'],json.dumps(questions,ensure_ascii=False),stamp))
   attempt_id=cur.lastrowid
  return {'attempt_id':attempt_id,'question_count':len(questions),'questions':public_questions(questions),
-         'responses':{},'resumed':False,'limitation':PLACEMENT_LIMITATION}
+         'responses':{},'resumed':False,'overlap_with_previous':overlap,'limitation':PLACEMENT_LIMITATION}
 
 @app.post('/api/placement/answer')
 def placement_save_answer(data:PlacementResponseSave,user=Depends(current)):

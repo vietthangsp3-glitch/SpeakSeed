@@ -65,7 +65,7 @@ def test_answers_resume_after_reload_and_are_account_scoped(tmp_path, monkeypatc
     owner = register(client, "placement-owner@example.com")
     other = register(client, "placement-other@example.com")
     started = client.post("/api/placement/start", headers=owner).json()
-    first = started["questions"][0]
+    first = next(item for item in started["questions"] if item["section"] != "listening")
     saved = client.post("/api/placement/answer", headers=owner, json={
         "attempt_id": started["attempt_id"], "question_key": first["key"], "answer": "saved answer"
     })
@@ -133,3 +133,22 @@ def test_equivalent_fill_and_ordering_answers_history_and_no_vocab_mastery(tmp_p
     con = sqlite3.connect(database)
     assert con.execute("SELECT COUNT(*) FROM progress").fetchone()[0] == 0
     con.close()
+
+
+def test_retake_prefers_unseen_questions_and_stays_balanced(tmp_path, monkeypatch):
+    client, database = setup_client(tmp_path, monkeypatch)
+    headers = register(client, "placement-retest@example.com")
+    first = client.post("/api/placement/start", headers=headers).json()
+    first_internal = internal_questions(database, first["attempt_id"])
+    payload = [{"question_key": item["key"], "answer": item["answers"][0]}
+               for item in first_internal]
+    assert client.post("/api/placement/submit", headers=headers,
+                       json={"attempt_id": first["attempt_id"], "answers": payload}).status_code == 200
+    second = client.post("/api/placement/start", headers=headers).json()
+    second_internal = internal_questions(database, second["attempt_id"])
+    overlap = {item["key"] for item in first_internal} & {item["key"] for item in second_internal}
+    assert len(overlap) <= 4
+    assert second["overlap_with_previous"] == len(overlap)
+    assert Counter(item["level"] for item in second_internal) == {
+        level: 8 for level in ("A0", "A1", "A2", "B1", "B2")
+    }

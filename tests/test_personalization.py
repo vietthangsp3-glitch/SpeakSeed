@@ -197,3 +197,44 @@ def test_existing_beginner_daily_plan_is_normalized_without_deleting_events(tmp_
     assert "writing" not in {item["key"] for item in normalized["items"]}
     with sqlite3.connect(database) as check:
         assert check.execute("SELECT COUNT(*) FROM learning_events WHERE user_id=?", (user_id,)).fetchone()[0] == 1
+
+
+def test_library_is_paginated_and_filters_on_backend(tmp_path, monkeypatch):
+    client, _ = setup_client(tmp_path, monkeypatch)
+    first = client.get("/api/vocabulary/library?level=A1&page=1&page_size=20").json()
+    second = client.get("/api/vocabulary/library?level=A1&page=2&page_size=20").json()
+    assert len(first["items"]) == len(second["items"]) == 20
+    assert first["total"] >= 1000 and first["has_more"] is True
+    assert {item["id"] for item in first["items"]}.isdisjoint(item["id"] for item in second["items"])
+    query = client.get("/api/vocabulary/library?level=A1&page_size=20&q=hello").json()
+    assert query["items"] and all(
+        "hello" in (item["word"] + " " + item["meaning"]).lower() for item in query["items"]
+    )
+    assert client.get("/api/vocabulary/library?level=A1&page_size=500").status_code == 400
+
+
+def test_xp_is_evidence_based_and_replay_resistant(tmp_path, monkeypatch):
+    client, database = setup_client(tmp_path, monkeypatch)
+    headers = register(client, "xp@example.com")
+    with sqlite3.connect(database) as con:
+        word_id = con.execute("SELECT id FROM library_words WHERE reviewed=1 AND stage='A1' LIMIT 1").fetchone()[0]
+    assert client.post("/api/progress", headers=headers,
+                       json={"word_id": word_id, "correct": True}).status_code == 200
+    learned = client.get("/api/dashboard", headers=headers).json()
+    assert learned["metrics"]["xp_total"] == 5
+    assert learned["metrics"]["mastered_words"] == 0
+    with sqlite3.connect(database) as con:
+        con.execute("UPDATE progress SET due_at='2000-01-01T00:00:00+00:00' WHERE word_id=?", (word_id,))
+    assert client.post("/api/progress", headers=headers,
+                       json={"word_id": word_id, "correct": True}).status_code == 200
+    reviewed = client.get("/api/dashboard", headers=headers).json()
+    assert reviewed["metrics"]["xp_total"] == 8
+    assert client.post("/api/progress", headers=headers,
+                       json={"word_id": word_id, "correct": True}).status_code == 200
+    replayed = client.get("/api/dashboard", headers=headers).json()
+    assert replayed["metrics"]["xp_total"] == reviewed["metrics"]["xp_total"]
+    assert replayed["achievements"][0] == {
+        "key": "first_word", "label": "Hạt mầm đầu tiên", "earned": True
+    }
+    path = client.get("/api/learning-path", headers=headers).json()
+    assert path["journey"] and path["journey"][0]["status"] == "in_progress"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from collections import defaultdict
 
@@ -78,7 +79,7 @@ def check(row, answer: str) -> dict:
     return result
 
 
-def placement_form(con) -> list[dict] | None:
+def placement_form(con, excluded_keys: set[str] | None = None, rng=None) -> list[dict] | None:
     """Return a balanced published form, or None so the legacy form stays active."""
     try:
         rows = published_rows(con, "placement", limit=1000)
@@ -97,12 +98,18 @@ def placement_form(con) -> list[dict] | None:
         "B2": {"grammar": 1, "vocabulary": 1, "listening": 1, "fill_blank": 2, "sentence_ordering": 2, "reading": 1},
     }
     selected = []
+    excluded = excluded_keys or set()
+    picker = rng or random.SystemRandom()
     for level in LEVELS:
         for section, count in quotas[level].items():
-            pool = sorted((item for item in by_level[level] if item["section"] == section), key=lambda x: x["key"])
+            pool = [item for item in by_level[level] if item["section"] == section]
             if len(pool) < count:
                 return None
-            selected.extend(pool[:count])
+            unseen = [item for item in pool if item["key"] not in excluded]
+            seen = [item for item in pool if item["key"] in excluded]
+            picker.shuffle(unseen); picker.shuffle(seen)
+            selected.extend((unseen + seen)[:count])
     if len(selected) != 40:
         return None
+    picker.shuffle(selected)
     return selected
