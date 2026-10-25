@@ -9,6 +9,13 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 
+def open_view(page, view: str) -> None:
+    target = page.locator(f'[data-view="{view}"]').first
+    if (page.viewport_size or {}).get("width", 1000) <= 700 or not target.is_visible():
+        page.locator("#menuToggle").click()
+    target.click()
+
+
 def run(base_url: str, output: Path) -> dict:
     results = []
     ai_requests = []
@@ -52,13 +59,13 @@ def run(base_url: str, output: Path) -> dict:
         with page.expect_response(lambda response: response.url.endswith("/api/progress")) as pending:
             page.locator("#correct").click()
         assert pending.value.status == 200
-        page.locator('[data-view="home"]').click()
-        page.get_by_text("Việc cần làm hôm nay").wait_for()
+        open_view(page, "home")
+        page.get_by_text("Kế hoạch học hôm nay").wait_for()
         assert int(page.locator(".metric-grid .metric").first.locator("b").inner_text()) >= 1
         passed("first_vocabulary_activity_is_saved")
 
         page.reload(wait_until="networkidle")
-        page.get_by_text("Việc cần làm hôm nay").wait_for()
+        page.get_by_text("Kế hoạch học hôm nay").wait_for()
         assert int(page.locator(".metric-grid .metric").first.locator("b").inner_text()) >= 1
         assert page.get_by_role("button", name="Đăng xuất", exact=True).is_visible()
         passed("session_and_progress_survive_reload")

@@ -9,6 +9,13 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 
+def open_view(page, view: str) -> None:
+    target = page.locator(f'[data-view="{view}"]').first
+    if (page.viewport_size or {}).get("width", 1000) <= 700 or not target.is_visible():
+        page.locator("#menuToggle").click()
+    target.click()
+
+
 def run(base_url: str, output: Path) -> dict:
     results = []
     ai_requests = []
@@ -31,7 +38,7 @@ def run(base_url: str, output: Path) -> dict:
         assert page.locator(".achievement").count() == 4
         results.append({"name": "dashboard_xp_journey", "status": "PASS"})
 
-        page.locator('[data-view="learn"]').click()
+        open_view(page, "learn")
         page.locator("#reveal").wait_for()
         assert page.get_by_text("Tải thêm 80 từ", exact=True).is_visible()
         assert "80" in page.locator(".counter").inner_text() or "/ 1000" in page.locator(".counter").inner_text()

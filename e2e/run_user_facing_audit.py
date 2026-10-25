@@ -24,7 +24,10 @@ AI_ROUTES = ("/api/chat", "/api/pronunciation/ai", "/api/speaking/", "/writing/s
 def audit_views(page: Page, viewport_name: str) -> list[dict]:
     results: list[dict] = []
     for view in VIEWS:
-        page.locator(f'[data-view="{view}"]').click()
+        target = page.locator(f'[data-view="{view}"]')
+        if (page.viewport_size or {}).get("width", 1000) <= 700 or not target.is_visible():
+            page.locator("#menuToggle").click()
+        target.click()
         page.locator("#content").wait_for(state="visible")
         text = page.locator("body").inner_text()
         assert page.locator("#content").inner_text().strip(), f"{view} has no content"

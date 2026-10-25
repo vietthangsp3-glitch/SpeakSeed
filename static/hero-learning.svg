@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" role="img" aria-labelledby="title desc">
+  <title id="title">Học tiếng Anh mỗi ngày</title>
+  <desc id="desc">Minh họa một bạn nhỏ cầm sách giữa khu vườn xanh</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#dbf7e9"/><stop offset="1" stop-color="#bdebd6"/></linearGradient>
+    <linearGradient id="shirt" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2fa97c"/><stop offset="1" stop-color="#16785c"/></linearGradient>
+  </defs>
+  <rect width="720" height="320" rx="28" fill="url(#sky)"/>
+  <circle cx="574" cy="55" r="78" fill="#fff" opacity=".28"/>
+  <g fill="#fff" opacity=".58"><path d="M72 92c10-24 45-22 52 3 23-10 42 7 40 25H45c-2-18 11-31 27-28z"/><path d="M455 74c8-20 36-19 43 2 18-8 34 6 32 21h-96c-1-15 9-25 21-23z"/></g>
+  <g fill="#58bc89"><path d="M0 246c48-40 89-35 127 6 42-49 96-53 147-6 46-57 101-52 149 2 49-45 99-42 149 4 42-37 94-35 148 5v63H0z" opacity=".5"/><path d="M0 277c80-37 143-30 195 13 59-40 120-41 183 0 63-42 137-40 205 3 43-27 89-29 137-7v34H0z"/></g>
+  <g transform="translate(286 42)">
+    <path d="M55 205c-22 6-43 23-53 58h231c-7-35-28-57-58-62z" fill="#176c55" opacity=".2"/>
+    <path d="M75 131c-27 16-41 42-42 78l24 50h123l25-52c-3-40-20-65-48-77z" fill="url(#shirt)"/>
+    <path d="M89 150l26 30 29-31" fill="none" stroke="#f7fff9" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="119" cy="91" r="63" fill="#ffd8bf"/>
+    <path d="M59 92c-5-51 21-78 61-78 41 0 68 29 63 71-18-13-29-30-35-49-22 25-52 39-89 42z" fill="#473127"/>
+    <path d="M65 70c5-30 29-55 59-59-3 9-8 18-17 27 18-10 38-12 58-6-8 8-15 14-23 18 17-3 31 0 42 9" fill="none" stroke="#473127" stroke-width="18" stroke-linecap="round"/>
+    <ellipse cx="95" cy="91" rx="6" ry="9" fill="#263d36"/><ellipse cx="144" cy="91" rx="6" ry="9" fill="#263d36"/>
+    <path d="M101 118c13 11 27 11 39 0" fill="none" stroke="#c65b55" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="78" cy="108" r="9" fill="#f7a195" opacity=".65"/><circle cx="160" cy="108" r="9" fill="#f7a195" opacity=".65"/>
+    <path d="M174 154c27-17 34-43 24-77" fill="none" stroke="#ffd8bf" stroke-width="21" stroke-linecap="round"/>
+    <path d="M198 76c-4-17-2-30 6-41m-5 40c9-13 15-22 19-34" fill="none" stroke="#ffd8bf" stroke-width="10" stroke-linecap="round"/>
+    <g transform="translate(61 180)"><path d="M0 0c30-9 57-5 78 12 21-17 48-21 78-12v73c-29-8-55-4-78 11C55 69 29 65 0 73z" fill="#fffdf3" stroke="#e6c96b" stroke-width="4"/><path d="M78 12v72" stroke="#e6c96b" stroke-width="3"/><path d="M23 22h35M20 36h39M98 22h35M96 36h40" stroke="#b8b29b" stroke-width="3" stroke-linecap="round"/></g>
+  </g>
+  <g transform="translate(565 95) rotate(-4)"><rect width="125" height="86" rx="14" fill="#176f56"/><text x="62" y="34" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="18" font-weight="700">Mỗi ngày</text><text x="62" y="58" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="18" font-weight="700">một chút!</text></g>
+  <g fill="#217f65"><path d="M235 68c-20-25-42-26-57-6 25 2 39 13 42 35 9-7 14-17 15-29z"/><path d="M234 68c20-25 42-26 57-6-25 2-39 13-42 35-9-7-14-17-15-29z"/></g>
+</svg>

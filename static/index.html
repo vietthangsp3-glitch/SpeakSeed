@@ -5,37 +5,48 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SpeakSeed — Học tiếng Anh mỗi ngày</title>
   <link rel="stylesheet" href="/static/style.css?v=13">
+  <link rel="stylesheet" href="/static/v2.css?v=3">
 </head>
 <body>
   <a class="skip-link" href="#content">Bỏ qua điều hướng</a>
   <div class="layout">
-    <aside class="sidebar">
-      <div class="brand"><span class="brandmark">✳</span> speak<span>seed</span><small>HỌC DỄ, NHỚ LÂU</small></div>
+    <aside class="sidebar" id="sidebar" aria-label="Điều hướng chính">
+      <div class="brand"><span class="brandmark">✳</span><span class="brandword">speak<span>seed</span><small>HỌC DỄ, NHỚ LÂU</small></span></div>
       <div class="nav" id="nav">
-        <button class="active" data-view="home">⌂ <span>Tổng quan</span></button>
-        <button data-view="placement">◎ <span>Kiểm tra đầu vào</span></button>
-        <button data-view="learn">▦ <span>Học từ vựng</span></button>
-        <button data-view="reverse">✎ <span>Việt → Anh</span></button>
-        <button data-view="grammar">▣ <span>Ngữ pháp</span></button>
-        <button data-view="skills">◈ <span>4 kỹ năng</span></button>
-        <button data-view="rewrite">⇄ <span>Viết lại câu</span></button>
-        <button data-view="dictation">♫ <span>Nghe & chép</span></button>
-        <button data-view="speak">◉ <span>Luyện phát âm</span></button>
-        <button data-view="quiz">✦ <span>Mini game</span></button>
-        <button data-view="conversation">🎙 <span>Luyện hội thoại</span></button>
-        <button data-view="tutor">✧ <span>Gia sư (tùy chọn)</span></button>
-        <button data-view="progress">▤ <span>Tiến độ</span></button>
+        <p class="nav-label">TỔNG QUAN</p>
+        <button class="active" data-view="home"><span class="nav-icon">⌂</span><span>Tổng quan</span></button>
+        <p class="nav-label">HỌC TẬP</p>
+        <button data-view="learn"><span class="nav-icon">▤</span><span>Học từ vựng</span></button>
+        <button data-view="grammar"><span class="nav-icon">▣</span><span>Ngữ pháp</span></button>
+        <button data-view="reverse"><span class="nav-icon">✎</span><span>Việt → Anh</span></button>
+        <button data-view="skills"><span class="nav-icon">◇</span><span>Bốn kỹ năng</span></button>
+        <p class="nav-label">LUYỆN KỸ NĂNG</p>
+        <button data-view="dictation"><span class="nav-icon">♫</span><span>Nghe &amp; chép</span></button>
+        <button data-view="speak"><span class="nav-icon">◉</span><span>Luyện phát âm</span></button>
+        <button data-view="rewrite"><span class="nav-icon">⇄</span><span>Viết lại câu</span></button>
+        <button data-view="conversation"><span class="nav-icon">◌</span><span>Luyện hội thoại</span></button>
+        <button data-view="tutor"><span class="nav-icon">✧</span><span>Gia sư tùy chọn</span></button>
+        <p class="nav-label">THỬ THÁCH</p>
+        <button data-view="quiz"><span class="nav-icon">✦</span><span>Mini game</span></button>
+        <button data-view="placement"><span class="nav-icon">◎</span><span>Kiểm tra đầu vào</span></button>
+        <p class="nav-label">TÀI KHOẢN</p>
+        <button data-view="progress"><span class="nav-icon">▥</span><span>Tiến độ</span></button>
+        <a class="nav-link" href="/data-attribution" target="_blank" rel="noopener"><span class="nav-icon">◫</span><span>Nguồn dữ liệu</span></a>
       </div>
       <div class="sidebar-bottom">
         <div class="side-card"><div>🌱</div><b>Mỗi ngày một chút!</b><p>10 phút mỗi ngày giúp bạn xây dựng thói quen học tiếng Anh.</p></div>
         <div class="user" id="sideUser">Đăng nhập để lưu tiến độ</div>
-        <a class="attribution-link" href="/data-attribution" target="_blank" rel="noopener">Nguồn dữ liệu &amp; giấy phép</a>
       </div>
     </aside>
+    <button class="sidebar-overlay" id="sidebarOverlay" aria-label="Đóng menu" tabindex="-1"></button>
     <main class="main" aria-label="Nội dung học tập">
       <header class="top">
-        <div class="breadcrumb">HỌC TIẾNG ANH TỪ CON SỐ 0 <span> / </span> <b id="crumb">Tổng quan</b></div>
-        <div class="topright"><span class="pill">🔥 <b id="streak">0</b> ngày học</span><button class="outline" id="authBtn">Đăng nhập</button></div>
+        <button class="menu-toggle" id="menuToggle" aria-label="Mở menu" aria-expanded="false">☰</button>
+        <div class="page-identity"><span>SpeakSeed</span><b id="crumb">Tổng quan</b></div>
+        <div class="topright">
+          <span class="pill">🔥 <b id="streak">0</b> ngày học</span>
+          <button class="account-button" id="authBtn"><span class="account-avatar" id="accountAvatar">S</span><span class="account-copy"><b id="accountName">Đăng nhập</b><small id="accountLevel">Lưu tiến độ học</small></span><span aria-hidden="true">⌄</span></button>
+        </div>
       </header>
       <div class="content" id="content" tabindex="-1"></div>
     </main>
@@ -52,6 +63,6 @@
     <p class="error" id="authError"></p><button class="textbtn" id="switchAuth">Chưa có tài khoản? Đăng ký</button>
   </div></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=13"></script>
+  <script src="/static/app.js?v=14"></script>
 </body>
 </html>
